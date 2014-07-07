@@ -17,7 +17,7 @@ int main(int argc, char *argv[]){
 
 	// Set up a couple variables
 	char byte1 = 0;
-	unsigned long distribution [300];
+	unsigned long distribution [256] = {0};
 	unsigned char eof_reached = 0;
 
 	// The device is now open, lets try reading from it.
@@ -31,7 +31,7 @@ int main(int argc, char *argv[]){
 		}
 
 		if(eof_reached){
-			for(int i = 0; i < 240; i++){
+			for(int i = 0; i < 256; i++){
 				printf("%lu ", distribution[i]);
 			}
 			printf("\r\n");
