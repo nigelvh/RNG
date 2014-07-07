@@ -13,10 +13,10 @@
 int main(int argc, char *argv[]){
 	FILE *fp;
 
-	fp  = fopen(argv[1], "r");
+	fp  = fopen(argv[1], "rb");
 
 	// Set up a couple variables
-	char byte1 = 0;
+	int byte1 = 0;
 	unsigned long distribution [256] = {0};
 	unsigned char eof_reached = 0;
 
