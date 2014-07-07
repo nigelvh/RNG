@@ -1,14 +1,9 @@
-/* Compile: gcc -Wall -O read_serial_port.c -o read_serial_port */
+/* Compile: gcc -Wall -O distribution.c -o distribution */
+/* Takes in a file as an argument, reads through the file, and outputs a space */
+/* separated list of the total count of each character value from 0-255        */
+/* Nigel VH                                                                    */
 
-#include <sys/ioctl.h>
-#include <fcntl.h>
-#include <errno.h>
-#include <termios.h>
-#include <unistd.h>
 #include <stdio.h>
-#include <stdint.h>
-#include <string.h>
-#include <stdlib.h>
 
 int main(int argc, char *argv[]){
 	FILE *fp;
