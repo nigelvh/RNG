@@ -1,4 +1,4 @@
-/* Compile: gcc -Wall -O distribution.c -o distribution */
+/* Compile: gcc -Wall -O distribution.c -o distribution                        */
 /* Takes in a file as an argument, reads through the file, and outputs a space */
 /* separated list of the total count of each character value from 0-255        */
 /* Nigel VH                                                                    */
