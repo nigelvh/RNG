@@ -8,7 +8,7 @@
 #include <stdio.h>
 #include <string.h>
 
-char deskew(char *c1, char *c2){
+int deskew(char *c1, char *c2){
         if (*c1 == '0' && *c2 == '1')
         	return 0;
         else if (*c1 == '1' && *c2 == '0')
@@ -25,7 +25,7 @@ int main(int argc, char *argv[]){
 	}
 
 	// Try opening the device, and error if we can't.
-	int fd = open(argv[1], O_RDONLY);
+	int fd = open(argv[1], O_RDONLY | O_NOCTTY);
 	if(fd < 0){
 		printf("Could not open the tty device, %s. Error %d: %s\r\n", argv[1], errno, strerror(errno));
 		return 2;
@@ -33,7 +33,7 @@ int main(int argc, char *argv[]){
 
 	// Set up a couple variables
 	char buf [128];
-	char result = 0;
+	int result = 0;
 	int num_bytes = 0;
 
 	// The device is now open, lets try reading from it.
@@ -53,13 +53,14 @@ int main(int argc, char *argv[]){
 				printf("Error reading from tty device. Error %d: %s\r\n", errno, strerror(errno));
 				return 3;
 			}
-			if(n < 128){
+			if(n < sizeof(buf)){
 				printf("Error reading from tty device. Fewer bytes than expected. Num bytes: %d", n);
 				return 4;
 			}
 			
 			// Read through the bytes
-			for(unsigned char i = 1; i < n; i+=2){
+			unsigned char i = 1;
+			for(; i < n; i+=2){
 				// If for some reason we get an EOF, quit.
 				if(buf[i-1] == EOF || buf[i] == EOF) return 0;
 				
