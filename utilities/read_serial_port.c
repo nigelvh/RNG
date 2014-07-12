@@ -4,12 +4,9 @@
 #include <sys/ioctl.h>
 #include <fcntl.h>
 #include <errno.h>
-#include <termios.h>
 #include <unistd.h>
 #include <stdio.h>
-#include <stdint.h>
 #include <string.h>
-#include <stdlib.h>
 
 char deskew(char *c1, char *c2){
         if (*c1 == '0' && *c2 == '1')
