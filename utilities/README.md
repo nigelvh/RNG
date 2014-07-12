@@ -65,3 +65,21 @@ to stdout.
 Output from this program is both too long to reasonably include here, and will vary based 
 on input from the serial device, but should be composed of only ASCII '1' and '0' 
 characters.
+
+dfu-programmer
+--------------
+
+This utility was precompiled for OSX with libusb installed. This provides programming 
+capability for the atmega16u2 microcontroller on the USB stick, using Atmel's FLIP 
+protocol.
+
+The device must first be placed in DFU mode by shorting the reset pin to ground 
+momentarily, after which, the device will be receptive to commands from dfu-programmer.
+
+	./dfu-programmer atmega16u2 erase
+	./dfu-programmer atmega16u2 flash RNG.hex
+	./dfu-programmer atmega16u2 start
+
+The device by default will boot into the normal program automatically. Running the 
+start command from DFU programmer is only needed to bring it out of DFU mode. This can 
+also be accomplished simply by unplugging the device, and plugging it back in.
