@@ -1,4 +1,3 @@
-=======
 K7NVH Random Number Generator
 =======
 

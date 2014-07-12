@@ -1,5 +1,16 @@
+/* (c) 2014 Nigel Vander Houwen */
+
 #include <avr/io.h>
-#include "RNG.h"
+#include <avr/wdt.h>
+#include <avr/power.h>
+#include <avr/interrupt.h>
+#include <string.h>
+#include <stdio.h>
+
+#include "Descriptors.h"
+
+#include <LUFA/Drivers/USB/USB.h>
+#include <LUFA/Platform/Platform.h>
 
 unsigned char count = 0;
 unsigned char buffer = 0;
@@ -56,24 +67,23 @@ int main(void){
   // Create a regular character stream for the interface so that it can be used with the stdio.h functions
   CDC_Device_CreateStream(&VirtualSerial_CDC_Interface, &USBSerialStream);
 
+  // Enable interrupts
   GlobalInterruptEnable();
 
   for (;;){
-    // Grab 8 bits of raw data
-    //buffer = 0;
-	//for(char i = 0; i < 8; i++){
-	//  buffer = buffer | (((PINC & 0b00000100) << 5) >> i);
-	//}
-	
-	// Form it into a hexadecimal number and send it
-	//sprintf(&str[0], "%02X", buffer);
-	//fputs(str, &USBSerialStream);
-
+	// Blink the third LED as we gather entropy
+	PORTD = PORTD & 0b11101111;
+  
+  	// Read a bit, and dump it out the USB Serial stream.
 	fputc(((PINC & 0b00000100) >> 2) + '0', &USBSerialStream);
+	
+    // Un-blink the third LED
+    PORTD = PORTD | 0b00010000;
 
     // Must throw away unused bytes from the host, or it will lock up while waiting for the device
     CDC_Device_ReceiveByte(&VirtualSerial_CDC_Interface);
 
+	// Run the LUFA stuff
     CDC_Device_USBTask(&VirtualSerial_CDC_Interface);
     USB_USBTask();
   }
