@@ -5,7 +5,7 @@ K7NVH Random Number Generator Utilities
 These utilities are designed to help test various aspects of the K7NVH RNG.
 
 ascii_hex_to_bin.c
-__________________
+------------------
 
 This utility reads a stream of pairs of ASCII hex characters (0-9,A-F) from stdin, and 
 prints to stdout the equivalent raw binary data.
