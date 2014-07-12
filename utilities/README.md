@@ -17,7 +17,7 @@ Which should output:
 	K7NVH RNG
 
 ascii_to_bin.c
-______________
+--------------
 
 This utility reads a stream of ASCII binary characters ('1' and '0') from stdin, and 
 prints to stdout the equivalent raw binary data.
@@ -29,7 +29,7 @@ Which should output:
 	HI
 
 deskewing.c
-___________
+-----------
 
 This utility reads a stream of ASCII binary characters ('1' and '0' from stdin, and 
 prints to stdout the whitened ASCII binary data.
@@ -43,7 +43,7 @@ Which should output:
 	00000111111
 	
 distribution.c
-______________
+--------------
 
 This utility reads a stream of raw binary data from a file provided as the first argument 
 to the command, and counts the occurrences of each binary value (from 0 to 255), then 
@@ -55,7 +55,7 @@ relative occurrence of each binary value.
 Output from this program is too long to reasonably include here.
 
 read_serial_port.c
-__________________
+------------------
 
 This utility reads ASCII binary from a serial port provided as the first argument to the 
 command, performs whitening on the captured data, and outputs the whitened ASCII binary 
