@@ -55,7 +55,26 @@ int main(int argc, char *argv[]){
 	
 	// If we're on linux, read the current count from the entropy pool, and push new stuff in via ioctl
 	#ifdef __linux__
+		struct {
+			int ent_count;
+			int size;
+			unsigned char data[1024];
+		} entropy;	
+
+		entropy.data[0] = 42;
+		entropy.size = 1;
+		entropy.ent_count = 8;
+
 		int count = 0;
+		if( ioctl(fd, RNDGETENTCNT, &count) < 0 ){
+			printf("Could not read the entropy count. Error %d: %s\r\n", errno, strerror(errno));
+			return 2;
+		}
+		printf("Entropy Pool Size: %d\r\n", count);
+		if( ioctl(fd, RNDADDENTROPY, &entropy) < 0){
+			printf("Could not add entropy to the pool. Error %d: %s\r\n", errno, strerror(errno));
+			return 5;
+		}
 		if( ioctl(fd, RNDGETENTCNT, &count) < 0 ){
 			printf("Could not read the entropy count. Error %d: %s\r\n", errno, strerror(errno));
 			return 2;
