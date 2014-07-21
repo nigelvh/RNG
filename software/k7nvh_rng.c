@@ -9,6 +9,7 @@
 #include <string.h>
 #include <time.h>
 #include <sys/ioctl.h>
+#include <signal.h>
 
 // Define some directories
 #define pidfile "/tmp/k7nvh_rng.pid"
