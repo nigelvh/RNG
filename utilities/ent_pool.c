@@ -1,4 +1,6 @@
 /* (c) 2014 Nigel Vander Houwen */
+/* On OSX hosts, will test reading a byte from /dev/random, and then writing that back to /dev/random. */
+/* On Linux hosts, will test reading the size of the entropy pool, and pushing data in, via the ioctl interface. */
 /* Compile: gcc -Wall -O ent_pool.c -o ent_pool */
 
 #include <stdio.h>

@@ -83,3 +83,22 @@ momentarily, after which, the device will be receptive to commands from dfu-prog
 The device by default will boot into the normal program automatically. Running the 
 start command from DFU programmer is only needed to bring it out of DFU mode. This can 
 also be accomplished simply by unplugging the device, and plugging it back in.
+
+ent_pool.c
+----------
+
+This utility is designed to test status and pushing data into the kernel entropy pool. 
+In the case of OSX hosts, this is accomplished by opening /dev/random, reading a random 
+byte, and then writing that byte back into /dev/random. If that completed, then it worked.
+In the case of Linux hosts, this is accomplished via the ioctl interface. We read the 
+count of the kernel entropy pool (in bits), write a byte into the entropy pool, and 
+re-read the count.
+
+Linux:
+	./ent_pool 
+	Entropy Pool Size: 163
+	Entropy Pool Size: 171
+OSX:
+	./ent_pool 
+	Read 1 bytes from /dev/random.
+	Wrote 1 bytes to /dev/random.
