@@ -39,9 +39,16 @@ int main(int argc, char *argv[]){
 		return 5;
 	}
 
-	tty.c_iflag = 0;
+	// Set what we want the serial interface attributes to be
+	tty.c_cflag = (tty.c_cflag & ~CSIZE) | CS8; // 8 bit characters
+	tty.c_iflag &= ~IGNBRK; // Ignore Breaks
 	tty.c_lflag = 0;
 	tty.c_oflag = 0;
+	tty.c_iflag &= ~(IXON | IXOFF | IXANY); // Disable hardware flow control
+	tty.c_cflag |= (CLOCAL | CREAD); // Local control, enable reads
+	tty.c_cflag &= ~(PARENB | PARODD); // No parity
+	tty.c_cflag &= ~CSTOPB; 
+	tty.c_cflag &= ~CRTSCTS;
 
 	if(tcsetattr(fd, TCSANOW, &tty) != 0){
 		printf("Could not set tty device attributes. Error %d: %s\r\n", errno, strerror(errno));

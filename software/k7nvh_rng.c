@@ -185,15 +185,15 @@ int main(int argc, char *argv[]) {
 	}
 
 	// Set what we want the serial interface attributes to be
-    tty.c_cflag = (tty.c_cflag & ~CSIZE) | CS8; // 8 bit characters
-    tty.c_iflag &= ~IGNBRK; // Ignore Breaks
-    tty.c_lflag = 0;
-    tty.c_oflag = 0;
-    tty.c_iflag &= ~(IXON | IXOFF | IXANY); // Disable hardware flow control
-    tty.c_cflag |= (CLOCAL | CREAD); // Local control, enable reads
-    tty.c_cflag &= ~(PARENB | PARODD); // No parity
-    tty.c_cflag &= ~CSTOPB; 
-    tty.c_cflag &= ~CRTSCTS;
+	tty.c_cflag = (tty.c_cflag & ~CSIZE) | CS8; // 8 bit characters
+	tty.c_iflag &= ~IGNBRK; // Ignore Breaks
+	tty.c_lflag = 0;
+	tty.c_oflag = 0;
+	tty.c_iflag &= ~(IXON | IXOFF | IXANY); // Disable hardware flow control
+	tty.c_cflag |= (CLOCAL | CREAD); // Local control, enable reads
+	tty.c_cflag &= ~(PARENB | PARODD); // No parity
+	tty.c_cflag &= ~CSTOPB; 
+	tty.c_cflag &= ~CRTSCTS;
 
 	// Set the serial interface attributes
 	if(tcsetattr(entFileHandle, TCSANOW, &tty) != 0){
