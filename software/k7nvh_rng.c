@@ -10,16 +10,19 @@
 #include <time.h>
 #include <sys/ioctl.h>
 #include <signal.h>
+#include <termios.h>
 
 // Define some directories
 #define pidfile "/tmp/k7nvh_rng.pid"
 #define logfile "/var/log/k7nvh_rng.log"
+#define outfile "/tmp/k7nvh_rng_out.ascii"
 #define rundir "/"
 
 // File handles
 int pidFileHandle;
 int logFileHandle;
 int entFileHandle;
+int outFileHandle;
 
 // Buffer and state regarding reading from serial device
 char buf [128] = {0};
@@ -35,9 +38,9 @@ int test_ent = 0;
 
 void exit_cleanup(int value){
 	// Close file handles before exit
-	close(pidFileHandle);
-    close(logFileHandle);
-    close(entFileHandle);
+	if(pidFileHandle > 0) close(pidFileHandle);
+    if(logFileHandle > 0) close(logFileHandle);
+    if(entFileHandle > 0) close(entFileHandle);
     
     // Actually exit
     exit(value);
@@ -51,7 +54,7 @@ void log_message(char *message){
 	char timestr[30];
 	strftime(timestr, 30, "%F %T", timeinfo);
 	
-	char logentry[512];
+	char logentry[1024];
 	sprintf(logentry, "%s K7NVH_RNG[%d]: %s\r\n", timestr, getpid(), message);
 	write(logFileHandle, &logentry, strlen(logentry));
 }
@@ -61,7 +64,7 @@ void signal_handler(int sig){
 
     switch(sig){
     	case SIGALRM:
-    		test_ent = 1;
+    		//test_ent = 1;
     		break;
         case SIGHUP:
             log_message("<WARNING> Received SIGHUP signal.");
@@ -157,23 +160,50 @@ int main(int argc, char *argv[]) {
     close(STDERR_FILENO);
     
     // Set up the signal handlers
-	signal(SIGALRM, signal_handler);
-	signal(SIGHUP, signal_handler);
-	signal(SIGINT, signal_handler);
-	signal(SIGTERM, signal_handler);
+	//signal(SIGALRM, signal_handler);
+	//signal(SIGHUP, signal_handler);
+	//signal(SIGINT, signal_handler);
+	//signal(SIGTERM, signal_handler);
     
     // Daemon-specific initialization goes here
 	// Try opening the tty device, and error if we can't.
-	int entFileHandle = open(argv[1], O_RDONLY | O_NOCTTY);
+	entFileHandle = open(argv[1], O_RDONLY | O_NOCTTY);
 	if(entFileHandle < 0){
 		char logmessage[200];
 		sprintf(logmessage, "<ERROR> Could not open the tty device, %s. Error %d: %s", argv[1], errno, strerror(errno));
 		log_message(logmessage);
 		exit_cleanup(-8);
 	}
+	
+	// Read serial interface attributes
+	struct termios tty;
+	if(tcgetattr(entFileHandle, &tty) != 0){
+		char logmessage[200];
+		sprintf(logmessage, "<ERROR> Could not get the tty device attributes. Error %d: %s", errno, strerror(errno));
+		log_message(logmessage);
+		exit_cleanup(-13);
+	}
+
+	// Set what we want the serial interface attributes to be
+    tty.c_cflag = (tty.c_cflag & ~CSIZE) | CS8; // 8 bit characters
+    tty.c_iflag &= ~IGNBRK; // Ignore Breaks
+    tty.c_lflag = 0;
+    tty.c_oflag = 0;
+    tty.c_iflag &= ~(IXON | IXOFF | IXANY); // Disable hardware flow control
+    tty.c_cflag |= (CLOCAL | CREAD); // Local control, enable reads
+    tty.c_cflag &= ~(PARENB | PARODD); // No parity
+    tty.c_cflag &= ~CSTOPB; 
+    tty.c_cflag &= ~CRTSCTS;
+
+	// Set the serial interface attributes
+	if(tcsetattr(entFileHandle, TCSANOW, &tty) != 0){
+		char logmessage[200];
+		sprintf(logmessage, "<ERROR> Could not set the tty device attributes. Error %d: %s", errno, strerror(errno));
+		exit_cleanup(-14);
+	}
 
 	// Temporarily send data to a file rather than the entropy pool
-	int outFileHandle = open("/tmp/k7nvh_rng_out.ascii", O_RDWR|O_CREAT, 0644);
+	outFileHandle = open(outfile, O_RDWR|O_CREAT|O_APPEND, 0644);
 	if(outFileHandle < 0){
 		char logmessage[200];
 		sprintf(logmessage, "<ERROR> Could not open output file. Error %d: %s", errno, strerror(errno));
@@ -182,7 +212,7 @@ int main(int argc, char *argv[]) {
 	}
 
 	// Set up an alarm so we periodically test the quality of our entropy
-	alarm(60);
+	//alarm(60);
 
     log_message("<INFO> Entropy gathering daemon started.");
     
@@ -191,11 +221,15 @@ int main(int argc, char *argv[]) {
         // Reset our variables.
 		result = -1;
 		num_bytes = 0;
+		
+		//log_message("<DEBUG> Main loop...");
 
 		// Check on how many bytes are available
 		ioctl(entFileHandle, FIONREAD, &num_bytes);
 		if(num_bytes >= 128){
-			// Read two bytes from the serial port
+			//log_message("<DEBUG> Reading bytes...");
+		
+			// Read sizeof(buf) bytes from the serial port
 			int n = read(entFileHandle, buf, sizeof(buf));
 		
 			// Check for an error
@@ -215,6 +249,8 @@ int main(int argc, char *argv[]) {
 			// Read through the bytes
 			int i = 1;
 			for(; i < n; i+=2){
+				//log_message("<DEBUG> Processing bytes...");
+			
 				// If for some reason we get an EOF, quit.
 				if(buf[i-1] == EOF || buf[i] == EOF) return 0;
 				
@@ -224,33 +260,50 @@ int main(int argc, char *argv[]) {
 				// If whitening threw away the bits, we'll get a -1, if we didn't lets output it.
 				if(result >= 0){
 					result += '0';
+					
 					buf_whitened[buf_whitened_pos] = result;
 					buf_whitened_pos++;
 					
-					char output[1] = {result};
-					int m = write(outFileHandle, output, sizeof(output));
-					if(m < 0){
-						char logmessage[200];
-						sprintf(logmessage, "<ERROR> Error writing to output file. Error %d: %s", errno, strerror(errno));
+					//char logmessage[200];
+					//sprintf(logmessage, "<DEBUG> buf_whitened_pos = %d", buf_whitened_pos);
+					//log_message(logmessage);
+					
+					// Check if our whitened buffer is full
+					if(buf_whitened_pos >= sizeof(buf_whitened)){
+						char logmessage[600];
+						sprintf(logmessage, "<DEBUG> Writing %d bytes of whitened data to outfile.", buf_whitened_pos);
 						log_message(logmessage);
-						exit_cleanup(-12);
+					
+						// Write the data out to file
+						int m = write(outFileHandle, buf_whitened, sizeof(buf_whitened));
+						if(m < 0){
+							char logmessage[200];
+							sprintf(logmessage, "<ERROR> Error writing to output file. Error %d: %s", errno, strerror(errno));
+							log_message(logmessage);
+							exit_cleanup(-15);
+						}
+						
+						// Reset our buffer position variable
+						buf_whitened_pos = 0;
 					}
 				}
 				
 				// If we're scheduled to check the quality of the entropy, do this stuff
-				if(test_ent > 0){
-					log_message("Caught condition to test entropy.");
-					test_ent = 0;
-				}else{
-				
-				}
+				//if(test_ent > 0){
+				//	log_message("Caught condition to test entropy.");
+				//	test_ent = 0;
+				//}else{
+				//
+				//}
 			}
 		}else{
 			// Sleep for 100ms (non-blocking wait, lowers CPU time dramatically)
-			usleep(100*1000);
+			//log_message("<DEBUG> Sleeping...");
+			usleep(250*1000);
 		}
     }
     
 	// Clean up and exit
+	log_message("<ERROR> Reached end of program. We shouldn't be here...");
 	exit_cleanup(0);
 }

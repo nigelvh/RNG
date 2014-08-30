@@ -7,6 +7,7 @@
 #include <unistd.h>
 #include <stdio.h>
 #include <string.h>
+#include <termios.h>
 
 int deskew(char *c1, char *c2){
         if (*c1 == '0' && *c2 == '1')
@@ -29,6 +30,22 @@ int main(int argc, char *argv[]){
 	if(fd < 0){
 		printf("Could not open the tty device, %s. Error %d: %s\r\n", argv[1], errno, strerror(errno));
 		return 2;
+	}
+	
+	// Set serial interface attributes
+	struct termios tty;
+	if(tcgetattr(fd, &tty) != 0){
+		printf("Could not get tty device attributes. Error %d: %s\r\n", errno, strerror(errno));
+		return 5;
+	}
+
+	tty.c_iflag = 0;
+	tty.c_lflag = 0;
+	tty.c_oflag = 0;
+
+	if(tcsetattr(fd, TCSANOW, &tty) != 0){
+		printf("Could not set tty device attributes. Error %d: %s\r\n", errno, strerror(errno));
+		return 6;
 	}
 
 	// Set up a couple variables
