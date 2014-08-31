@@ -11,6 +11,7 @@
 #include <sys/ioctl.h>
 #include <signal.h>
 #include <termios.h>
+#include <math.h>
 
 // Define some directories
 #define pidfile "/tmp/k7nvh_rng.pid"
@@ -34,7 +35,12 @@ char buf_whitened [512] = {0};
 int buf_whitened_pos = 0;
 
 // Entropy estimation variables
+int ent_est_interval = 300;
 int test_ent = 0;
+int num_ones = 0;
+int num_zeros = 0;
+float average = 0.0;
+float est_ent = 0.0;
 
 void exit_cleanup(int value){
 	// Close file handles before exit
@@ -61,17 +67,19 @@ void log_message(char *message){
 
 void signal_handler(int sig){
 	char logmessage[200];
+	signal(sig, signal_handler);
 
     switch(sig){
     	case SIGALRM:
-    		//test_ent = 1;
+    		log_message("<DEBUG> Received SIGALRM signal.");
+    		test_ent = 1;
     		break;
         case SIGHUP:
-            log_message("<WARNING> Received SIGHUP signal.");
+            log_message("<NOTICE> Received SIGHUP signal.");
             break;
         case SIGINT:
         case SIGTERM:
-            log_message("<INFO> Received SIGTERM. Exiting.");
+            log_message("<NOTICE> Received SIGTERM. Exiting.");
             exit_cleanup(0);
             break;
         default:
@@ -160,10 +168,10 @@ int main(int argc, char *argv[]) {
     close(STDERR_FILENO);
     
     // Set up the signal handlers
-	//signal(SIGALRM, signal_handler);
-	//signal(SIGHUP, signal_handler);
-	//signal(SIGINT, signal_handler);
-	//signal(SIGTERM, signal_handler);
+	signal(SIGALRM, signal_handler);
+	signal(SIGHUP, signal_handler);
+	signal(SIGINT, signal_handler);
+	signal(SIGTERM, signal_handler);
     
     // Daemon-specific initialization goes here
 	// Try opening the tty device, and error if we can't.
@@ -238,7 +246,10 @@ int main(int argc, char *argv[]) {
 	}
 
 	// Set up an alarm so we periodically test the quality of our entropy
-	//alarm(60);
+	alarm(ent_est_interval);
+	char logmessage[200];
+	sprintf(logmessage, "<INFO> Next estimation of entropy in %d seconds.", ent_est_interval);
+	log_message(logmessage);
 
     log_message("<INFO> Entropy gathering daemon started.");
     
@@ -296,34 +307,62 @@ int main(int argc, char *argv[]) {
 					
 					// Check if our whitened buffer is full
 					if(buf_whitened_pos >= sizeof(buf_whitened)){
-						char logmessage[600];
-						sprintf(logmessage, "<DEBUG> Writing %d bytes of whitened data to outfile.", buf_whitened_pos);
-						log_message(logmessage);
+						//char logmessage[600];
+						//sprintf(logmessage, "<DEBUG> Writing %d bytes of whitened data to outfile.", buf_whitened_pos);
+						//log_message(logmessage);
 					
-						// Write the data out to file
-						int m = write(outFileHandle, buf_whitened, sizeof(buf_whitened));
-						if(m < 0){
+						// If we're scheduled to check the quality of the entropy, do this stuff
+						if(test_ent > 0){
+							//log_message("<DEBUG> Caught condition to test entropy.");
+							
+							// Count the number of 0's and 1's in our sample
+							int n = 0;
+							average = 0.0;
+							num_zeros = 0;
+							num_ones = 0;
+							for(; n < sizeof(buf_whitened); n++){
+								if(buf_whitened[n] == '1'){
+									num_ones++;
+								}else{
+									num_zeros++;
+								}
+							}
+							
+							// Calculate our average before moving onto estimating entropy
+							average = (float)num_ones / (float)sizeof(buf_whitened);
+							
+							// Estimate Shannon's entropy
+							est_ent = 0.0;
+							est_ent -= (1.0 * num_zeros / sizeof(buf_whitened)) * log2f((1.0 * num_zeros / sizeof(buf_whitened)));
+							est_ent -= (1.0 * num_ones / sizeof(buf_whitened)) * log2f((1.0 * num_ones / sizeof(buf_whitened)));
+							
+							// Print our estimation of entropy
 							char logmessage[200];
-							sprintf(logmessage, "<ERROR> Error writing to output file. Error %d: %s", errno, strerror(errno));
+							sprintf(logmessage, "<INFO> Sample average is: %f, Estimated entropy is: %f bits/bit. Next sample in %d seconds.", average, est_ent, ent_est_interval);
 							log_message(logmessage);
-							exit_cleanup(-15);
+							
+							// Re-set our alarm so we periodically test the quality of our entropy
+							alarm(ent_est_interval);
+	
+							// Reset our state variable
+							test_ent = 0;
+						}else{
+							// Write the data out to file
+							int m = write(outFileHandle, buf_whitened, sizeof(buf_whitened));
+							if(m < 0){
+								char logmessage[200];
+								sprintf(logmessage, "<ERROR> Error writing to output file. Error %d: %s", errno, strerror(errno));
+								log_message(logmessage);
+								exit_cleanup(-15);
+							}
 						}
-						
 						// Reset our buffer position variable
 						buf_whitened_pos = 0;
 					}
 				}
-				
-				// If we're scheduled to check the quality of the entropy, do this stuff
-				if(test_ent > 0){
-					log_message("Caught condition to test entropy.");
-					test_ent = 0;
-				}else{
-				
-				}
 			}
 		}else{
-			// Sleep for 100ms (non-blocking wait, lowers CPU time dramatically)
+			// Sleep for 250ms (non-blocking wait, lowers CPU time dramatically)
 			//log_message("<DEBUG> Sleeping...");
 			usleep(250*1000);
 		}

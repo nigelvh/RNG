@@ -14,3 +14,23 @@ transfers an endless (but at this point, biased) stream of ASCII '1' and '0' cha
 
 The stream of ASCII characters is then processed to whiten them, and converted to raw 
 binary data, which can be fed into the kernel entropy pool.
+
+firmware
+--------
+
+This is the source code to be compiled by AVR-GCC for installation on the device itself.
+The device should already have this installed, and is only needed if you want to make 
+modifications.
+
+software
+--------
+
+This is the source code to be compiled on your linux or OSX system for the entropy 
+processing daemon that will read from the RNG device, whiten the received entropy, and by 
+default, push the data into the kernel entropy pool for use by other applications.
+
+utilities
+---------
+
+This is the source code for a number of utilities and test programs created to flesh out 
+ideas or test functioning of the RNG device.
