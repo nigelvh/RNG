@@ -12,7 +12,7 @@
 
 #ifdef __APPLE__
 	// Do something
-#elif __linux__
+#elif __linux
 	#include <linux/random.h>
 #endif
 

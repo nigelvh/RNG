@@ -55,6 +55,32 @@ int main(int argc, char *argv[]){
 		return 6;
 	}
 
+	// Assert and then clear DTR
+#ifdef __APPLE__
+	if(ioctl(entFileHandle, TIOCSDTR) != 0){
+		char logmessage[200];
+		sprintf(logmessage, "<ERROR> Could not assert DTR. Error %d: %s", errno, strerror(errno));
+		exit_cleanup(-16);
+	}
+	if(ioctl(entFileHandle, TIOCCDTR) != 0){
+		char logmessage[200];
+		sprintf(logmessage, "<ERROR> Could not clear DTR. Error %d: %s", errno, strerror(errno));
+		exit_cleanup(-17);
+	}
+#elif __linux
+	int setdtr = TIOCM_DTR;
+	if(ioctl(entFileHandle, TIOCMBIC, &setdtr) != 0){
+		char logmessage[200];
+		sprintf(logmessage, "<ERROR> Could not assert DTR. Error %d: %s", errno, strerror(errno));
+		exit_cleanup(-16);
+	}
+	if(ioctl(entFileHandle, TIOCMBIS, &setdtr) != 0){
+		char logmessage[200];
+		sprintf(logmessage, "<ERROR> Could not clear DTR. Error %d: %s", errno, strerror(errno));
+		exit_cleanup(-17);
+	}
+#endif
+
 	// Set up a couple variables
 	char buf [128];
 	int result = 0;

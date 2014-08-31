@@ -167,14 +167,14 @@ int main(int argc, char *argv[]) {
     
     // Daemon-specific initialization goes here
 	// Try opening the tty device, and error if we can't.
-	entFileHandle = open(argv[1], O_RDONLY | O_NOCTTY);
+	entFileHandle = open(argv[1], O_RDONLY | O_NONBLOCK | O_NOCTTY);
 	if(entFileHandle < 0){
 		char logmessage[200];
 		sprintf(logmessage, "<ERROR> Could not open the tty device, %s. Error %d: %s", argv[1], errno, strerror(errno));
 		log_message(logmessage);
 		exit_cleanup(-8);
 	}
-	
+
 	// Read serial interface attributes
 	struct termios tty;
 	if(tcgetattr(entFileHandle, &tty) != 0){
@@ -202,6 +202,32 @@ int main(int argc, char *argv[]) {
 		exit_cleanup(-14);
 	}
 
+	// Assert and then clear DTR
+#ifdef __APPLE__
+	if(ioctl(entFileHandle, TIOCSDTR) != 0){
+		char logmessage[200];
+		sprintf(logmessage, "<ERROR> Could not assert DTR. Error %d: %s", errno, strerror(errno));
+		exit_cleanup(-16);
+	}
+	if(ioctl(entFileHandle, TIOCCDTR) != 0){
+		char logmessage[200];
+		sprintf(logmessage, "<ERROR> Could not clear DTR. Error %d: %s", errno, strerror(errno));
+		exit_cleanup(-17);
+	}
+#elif __linux
+	int setdtr = TIOCM_DTR;
+	if(ioctl(entFileHandle, TIOCMBIC, &setdtr) != 0){
+		char logmessage[200];
+		sprintf(logmessage, "<ERROR> Could not assert DTR. Error %d: %s", errno, strerror(errno));
+		exit_cleanup(-16);
+	}
+	if(ioctl(entFileHandle, TIOCMBIS, &setdtr) != 0){
+		char logmessage[200];
+		sprintf(logmessage, "<ERROR> Could not clear DTR. Error %d: %s", errno, strerror(errno));
+		exit_cleanup(-17);
+	}
+#endif
+	
 	// Temporarily send data to a file rather than the entropy pool
 	outFileHandle = open(outfile, O_RDWR|O_CREAT|O_APPEND, 0644);
 	if(outFileHandle < 0){
@@ -289,12 +315,12 @@ int main(int argc, char *argv[]) {
 				}
 				
 				// If we're scheduled to check the quality of the entropy, do this stuff
-				//if(test_ent > 0){
-				//	log_message("Caught condition to test entropy.");
-				//	test_ent = 0;
-				//}else{
-				//
-				//}
+				if(test_ent > 0){
+					log_message("Caught condition to test entropy.");
+					test_ent = 0;
+				}else{
+				
+				}
 			}
 		}else{
 			// Sleep for 100ms (non-blocking wait, lowers CPU time dramatically)
