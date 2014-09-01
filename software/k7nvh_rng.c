@@ -13,6 +13,9 @@
 #include <termios.h>
 #include <math.h>
 
+// Debug
+int debug = 0;
+
 // Define some directories
 #define pidfile "/tmp/k7nvh_rng.pid"
 #define logfile "/var/log/k7nvh_rng.log"
@@ -41,6 +44,7 @@ int num_ones = 0;
 int num_zeros = 0;
 float average = 0.0;
 float est_ent = 0.0;
+int ent_count = 0;
 
 void exit_cleanup(int value){
 	// Close file handles before exit
@@ -71,7 +75,7 @@ void signal_handler(int sig){
 
     switch(sig){
     	case SIGALRM:
-    		log_message("<DEBUG> Received SIGALRM signal.");
+    		if(debug > 0) log_message("<DEBUG> Received SIGALRM signal.");
     		test_ent = 1;
     		break;
         case SIGHUP:
@@ -259,12 +263,12 @@ int main(int argc, char *argv[]) {
 		result = -1;
 		num_bytes = 0;
 		
-		//log_message("<DEBUG> Main loop...");
+		if(debug > 0) log_message("<DEBUG> Main loop...");
 
 		// Check on how many bytes are available
 		ioctl(entFileHandle, FIONREAD, &num_bytes);
-		if(num_bytes >= 128){
-			//log_message("<DEBUG> Reading bytes...");
+		if(num_bytes >= sizeof(buf)){
+			if(debug > 0) log_message("<DEBUG> Reading bytes...");
 		
 			// Read sizeof(buf) bytes from the serial port
 			int n = read(entFileHandle, buf, sizeof(buf));
@@ -286,7 +290,7 @@ int main(int argc, char *argv[]) {
 			// Read through the bytes
 			int i = 1;
 			for(; i < n; i+=2){
-				//log_message("<DEBUG> Processing bytes...");
+				if(debug > 0) log_message("<DEBUG> Processing bytes...");
 			
 				// If for some reason we get an EOF, quit.
 				if(buf[i-1] == EOF || buf[i] == EOF) return 0;
@@ -301,19 +305,23 @@ int main(int argc, char *argv[]) {
 					buf_whitened[buf_whitened_pos] = result;
 					buf_whitened_pos++;
 					
-					//char logmessage[200];
-					//sprintf(logmessage, "<DEBUG> buf_whitened_pos = %d", buf_whitened_pos);
-					//log_message(logmessage);
+					if(debug > 0){
+						char logmessage[200];
+						sprintf(logmessage, "<DEBUG> buf_whitened_pos = %d", buf_whitened_pos);
+						log_message(logmessage);
+					}
 					
 					// Check if our whitened buffer is full
 					if(buf_whitened_pos >= sizeof(buf_whitened)){
-						//char logmessage[600];
-						//sprintf(logmessage, "<DEBUG> Writing %d bytes of whitened data to outfile.", buf_whitened_pos);
-						//log_message(logmessage);
+						if(debug > 0){
+							char logmessage[600];
+							sprintf(logmessage, "<DEBUG> Writing %d bytes of whitened data to outfile.", buf_whitened_pos);
+							log_message(logmessage);
+						}
 					
 						// If we're scheduled to check the quality of the entropy, do this stuff
 						if(test_ent > 0){
-							//log_message("<DEBUG> Caught condition to test entropy.");
+							if(debug > 0) log_message("<DEBUG> Caught condition to test entropy.");
 							
 							// Count the number of 0's and 1's in our sample
 							int n = 0;
@@ -338,7 +346,7 @@ int main(int argc, char *argv[]) {
 							
 							// Print our estimation of entropy
 							char logmessage[200];
-							sprintf(logmessage, "<INFO> Sample average is: %f, Estimated entropy is: %f bits/bit. Next sample in %d seconds.", average, est_ent, ent_est_interval);
+							sprintf(logmessage, "<INFO> Sample average is: %f, Estimated entropy is: %f bits/bit. %d bytes generated in last %d seconds.", average, est_ent, ent_count, ent_est_interval);
 							log_message(logmessage);
 							
 							// Re-set our alarm so we periodically test the quality of our entropy
@@ -346,14 +354,42 @@ int main(int argc, char *argv[]) {
 	
 							// Reset our state variable
 							test_ent = 0;
+							ent_count = 0;
 						}else{
-							// Write the data out to file
-							int m = write(outFileHandle, buf_whitened, sizeof(buf_whitened));
-							if(m < 0){
-								char logmessage[200];
-								sprintf(logmessage, "<ERROR> Error writing to output file. Error %d: %s", errno, strerror(errno));
-								log_message(logmessage);
-								exit_cleanup(-15);
+							int o = 0; 
+							for(; o < sizeof(buf_whitened); o += 8){
+								if(debug > 0){
+									char logmessage[600];
+									sprintf(logmessage, "<DEBUG> Stuffing bits into bytes. Byte %d.", (o/8));
+									log_message(logmessage);
+								}
+								
+								// Stuff 8 bits together into a byte
+								int p = o;
+								uint8_t value = 0;
+								for(; p < o+8; p++){
+									if(buf_whitened[p] == '0'){
+										value = (value << 1) | 0;
+									}else{
+										value = (value << 1) | 1;
+									}
+								}
+								
+								if(debug > 0){
+									sprintf(logmessage, "<DEBUG> New byte stuffed. Int value %d.", value);
+									log_message(logmessage);
+								}
+								
+								ent_count++;
+								
+								// Write out our byte
+								int m = write(outFileHandle, &value, sizeof(value));
+								if(m < 0){
+									char logmessage[200];
+									sprintf(logmessage, "<ERROR> Error writing to output file. Error %d: %s", errno, strerror(errno));
+									log_message(logmessage);
+									exit_cleanup(-15);
+								}
 							}
 						}
 						// Reset our buffer position variable
@@ -363,7 +399,7 @@ int main(int argc, char *argv[]) {
 			}
 		}else{
 			// Sleep for 250ms (non-blocking wait, lowers CPU time dramatically)
-			//log_message("<DEBUG> Sleeping...");
+			if(debug > 0) log_message("<DEBUG> Sleeping...");
 			usleep(250*1000);
 		}
     }
