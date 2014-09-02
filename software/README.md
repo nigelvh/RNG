@@ -42,3 +42,10 @@ These should look pretty familiar, but for clarity:
 
 	This is the optional file that will have random data written to it in lieu of the 
 	kernel entropy pool.
+
+By default, the software is configured to output entropy to the /tmp/k7nvh_rng_out file for 
+the user to verify that the captured entropy is of sufficient quality. Use a entropy 
+testing software package like ent or dieharder on the resulting file to give things a test.
+
+When you are satisfied that the entropy is of good quality, change `int file_output = 1;` 
+to 0 to enable pushing entropy into the kernel pool rather than the output file.
