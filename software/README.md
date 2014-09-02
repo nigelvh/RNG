@@ -23,7 +23,7 @@ The software will daemonize, and will create/make use of three files on your sys
 	
 	/var/log/k7nvh_rng.log
 	/tmp/k7nvh_rng.pid
-	/tmp/k7nvh_rng_out.ascii
+	/tmp/k7nvh_rng_out
 	
 These should look pretty familiar, but for clarity:
 
@@ -38,7 +38,7 @@ These should look pretty familiar, but for clarity:
 	The daemon will check if the file exists at start up, if it does not, it will be 
 	created. If it does exist, it will be opened, locked, and have the PID written to it.
 	
-/tmp/k7nvh_rng_out.ascii
+/tmp/k7nvh_rng_out
 
 	This is the optional file that will have random data written to it in lieu of the 
 	kernel entropy pool.

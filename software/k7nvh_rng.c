@@ -12,14 +12,20 @@
 #include <signal.h>
 #include <termios.h>
 #include <math.h>
+#ifdef __linux
+	#include <linux/random.h>
+#endif
+
 
 // Debug
 int debug = 0;
+int file_output = 1;
 
 // Define some directories
 #define pidfile "/tmp/k7nvh_rng.pid"
 #define logfile "/var/log/k7nvh_rng.log"
-#define outfile "/tmp/k7nvh_rng_out.ascii"
+#define outfile "/tmp/k7nvh_rng_out"
+#define rndfile "/dev/random"
 #define rundir "/"
 
 // File handles
@@ -27,6 +33,7 @@ int pidFileHandle;
 int logFileHandle;
 int entFileHandle;
 int outFileHandle;
+int rndFileHandle;
 
 // Buffer and state regarding reading from serial device
 char buf [128] = {0};
@@ -51,6 +58,8 @@ void exit_cleanup(int value){
 	if(pidFileHandle > 0) close(pidFileHandle);
     if(logFileHandle > 0) close(logFileHandle);
     if(entFileHandle > 0) close(entFileHandle);
+    if(outFileHandle > 0) close(outFileHandle);
+    if(rndFileHandle > 0) close(rndFileHandle);
     
     // Actually exit
     exit(value);
@@ -211,6 +220,7 @@ int main(int argc, char *argv[]) {
 	if(tcsetattr(entFileHandle, TCSANOW, &tty) != 0){
 		char logmessage[200];
 		sprintf(logmessage, "<ERROR> Could not set the tty device attributes. Error %d: %s", errno, strerror(errno));
+		log_message(logmessage);
 		exit_cleanup(-14);
 	}
 
@@ -219,11 +229,13 @@ int main(int argc, char *argv[]) {
 	if(ioctl(entFileHandle, TIOCSDTR) != 0){
 		char logmessage[200];
 		sprintf(logmessage, "<ERROR> Could not assert DTR. Error %d: %s", errno, strerror(errno));
+		log_message(logmessage);
 		exit_cleanup(-16);
 	}
 	if(ioctl(entFileHandle, TIOCCDTR) != 0){
 		char logmessage[200];
 		sprintf(logmessage, "<ERROR> Could not clear DTR. Error %d: %s", errno, strerror(errno));
+		log_message(logmessage);
 		exit_cleanup(-17);
 	}
 #elif __linux
@@ -231,22 +243,40 @@ int main(int argc, char *argv[]) {
 	if(ioctl(entFileHandle, TIOCMBIC, &setdtr) != 0){
 		char logmessage[200];
 		sprintf(logmessage, "<ERROR> Could not assert DTR. Error %d: %s", errno, strerror(errno));
+		log_message(logmessage);
 		exit_cleanup(-16);
 	}
 	if(ioctl(entFileHandle, TIOCMBIS, &setdtr) != 0){
 		char logmessage[200];
 		sprintf(logmessage, "<ERROR> Could not clear DTR. Error %d: %s", errno, strerror(errno));
+		log_message(logmessage);
 		exit_cleanup(-17);
 	}
 #endif
 	
 	// Temporarily send data to a file rather than the entropy pool
-	outFileHandle = open(outfile, O_RDWR|O_CREAT|O_APPEND, 0644);
-	if(outFileHandle < 0){
+	if(file_output > 0){
 		char logmessage[200];
-		sprintf(logmessage, "<ERROR> Could not open output file. Error %d: %s", errno, strerror(errno));
+		sprintf(logmessage, "<INFO> Saving generated entropy to %s in lieu of kernel pool.", outfile);
 		log_message(logmessage);
-		exit_cleanup(-11);
+			
+		outFileHandle = open(outfile, O_RDWR|O_CREAT|O_APPEND, 0644);
+		if(outFileHandle < 0){
+			char logmessage[200];
+			sprintf(logmessage, "<ERROR> Could not open output file. Error %d: %s", errno, strerror(errno));
+			log_message(logmessage);
+			exit_cleanup(-11);
+		}
+	}else{
+		log_message("<INFO> File output disabled. Saving generated entropy to kernel pool.");
+		
+		rndFileHandle = open(rndfile, O_RDWR);
+		if(rndFileHandle < 0){
+			char logmessage[200];
+			sprintf(logmessage, "<ERROR> Could not open the %s device. Error %d: %s", rndfile, errno, strerror(errno));
+			log_message(logmessage);
+			exit_cleanup(-18);
+		}
 	}
 
 	// Set up an alarm so we periodically test the quality of our entropy
@@ -346,8 +376,23 @@ int main(int argc, char *argv[]) {
 							
 							// Print our estimation of entropy
 							char logmessage[200];
-							sprintf(logmessage, "<INFO> Sample average is: %f, Estimated entropy is: %f bits/bit. %d bytes generated in last %d seconds.", average, est_ent, ent_count, ent_est_interval);
+							sprintf(logmessage, "<INFO> %lu bit sample: Average: %f, Est. Entropy: %f bits/bit. %d bytes generated in last %d seconds.", (long)sizeof(buf_whitened), average, est_ent, ent_count, ent_est_interval);
 							log_message(logmessage);
+							
+							// If we're on linux, we can also read the state of the entropy pool
+							#ifdef __linux
+								if(file_output < 1){
+									int rndcount = 0;
+									if( ioctl(rndFileHandle, RNDGETENTCNT, &rndcount) < 0 ){
+										char logmessage[200];
+										sprintf(logmessage, "Could not read the entropy count. Error %d: %s", errno, strerror(errno));
+										log_message(logmessage);
+										exit_cleanup(-20);
+									}
+									sprintf(logmessage, "<INFO> Linux kernel entropy pool has %d bits of entropy available.", rndcount);
+									log_message(logmessage);
+								}
+							#endif
 							
 							// Re-set our alarm so we periodically test the quality of our entropy
 							alarm(ent_est_interval);
@@ -366,7 +411,7 @@ int main(int argc, char *argv[]) {
 								
 								// Stuff 8 bits together into a byte
 								int p = o;
-								uint8_t value = 0;
+								char value = 0;
 								for(; p < o+8; p++){
 									if(buf_whitened[p] == '0'){
 										value = (value << 1) | 0;
@@ -382,13 +427,42 @@ int main(int argc, char *argv[]) {
 								
 								ent_count++;
 								
-								// Write out our byte
-								int m = write(outFileHandle, &value, sizeof(value));
-								if(m < 0){
-									char logmessage[200];
-									sprintf(logmessage, "<ERROR> Error writing to output file. Error %d: %s", errno, strerror(errno));
-									log_message(logmessage);
-									exit_cleanup(-15);
+								// If we're supposed to write to a file, do that now, otherwise send to the kernel entropy pool
+								if(file_output > 0){
+									int m = write(outFileHandle, &value, sizeof(value));
+									if(m < 0){
+										char logmessage[200];
+										sprintf(logmessage, "<ERROR> Error writing to output file. Error %d: %s", errno, strerror(errno));
+										log_message(logmessage);
+										exit_cleanup(-15);
+									}
+								}else{
+									#ifdef __APPLE__
+										int m = write(rndFileHandle, &value, sizeof(value));
+										if(m < 0){
+											char logmessage[200];
+											sprintf(logmessage, "Error writing to %s device. Error %d: %s", rndfile, errno, strerror(errno));
+											log_message(logmessage);
+											exit_cleanup(-21);
+										}
+									#elif __linux
+										struct {
+											int ent_count;
+											int size;
+											unsigned char data[1024];
+										} entropy;	
+
+										entropy.data[0] = value;
+										entropy.size = 1;
+										entropy.ent_count = 8;
+										
+										if( ioctl(rndFileHandle, RNDADDENTROPY, &entropy) < 0){
+											char logmessage[200];
+											sprintf(logmessage, "<ERROR> Could not add entropy to the pool. Error %d: %s", errno, strerror(errno));
+											log_message(logmessage);
+											exit_cleanup(-19);
+										}
+									#endif
 								}
 							}
 						}
