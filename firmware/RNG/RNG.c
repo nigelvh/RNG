@@ -20,7 +20,7 @@ volatile uint8_t str_ready = 0;
 volatile uint8_t loop_byte = 0;
 volatile uint8_t loop_bit = 0;
 
-volatile unsigned int TCNT1_Reset = 64000;
+volatile unsigned int TCNT1_Reset = 60000;
 
 #ifdef __AVR_ATmega16U2__
 	void (*bootloader)(void) = 0x1800;
@@ -58,16 +58,17 @@ static FILE USBSerialStream;
 ISR(TIMER1_OVF_vect){
   TCNT1 = TCNT1_Reset;
   
-  if(loop_bit == 0) str[loop_byte] = 0;
+  //if(loop_bit == 0) str[loop_byte] = 0;
   
   // Grab sample
   uint8_t working = ((PINC & 0b00000100) >> 2);
 
-  //fputc((working + '0'), &USBSerialStream);
+  fputc((working + '0'), &USBSerialStream);
   
-  str[loop_byte] |= working << (7 - loop_bit);
+  //str[loop_byte] |= working << (7 - loop_bit);
   
   // Update position
+  /*
   if(loop_bit < 7){
   	loop_bit++;
   }else{
@@ -79,6 +80,7 @@ ISR(TIMER1_OVF_vect){
   	  str_ready = 1;
   	}
   }
+  */
 }
 
 // Main program entry point.
