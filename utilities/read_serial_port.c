@@ -1,4 +1,4 @@
-/* (c) 2014 Nigel Vander Houwen */
+/* (c) 2017 Nigel Vander Houwen */
 /* Compile: gcc -Wall -O read_serial_port.c -o read_serial_port */
 
 #include <sys/ioctl.h>
@@ -8,14 +8,16 @@
 #include <stdio.h>
 #include <string.h>
 #include <termios.h>
+#include <stdlib.h>
 
-int deskew(char *c1, char *c2){
-        if (*c1 == '0' && *c2 == '1')
-        	return 0;
-        else if (*c1 == '1' && *c2 == '0')
-            return 1;
-        else
-			return -1;
+int entFileHandle;
+
+void exit_cleanup(int value){
+	// Close file handles before exit
+	if(entFileHandle > 0) close(entFileHandle);
+
+	// Actually exit
+	exit(value);
 }
 
 int main(int argc, char *argv[]){
@@ -26,17 +28,17 @@ int main(int argc, char *argv[]){
 	}
 
 	// Try opening the device, and error if we can't.
-	int fd = open(argv[1], O_RDONLY | O_NOCTTY);
-	if(fd < 0){
-		printf("Could not open the tty device, %s. Error %d: %s\r\n", argv[1], errno, strerror(errno));
-		return 2;
+	entFileHandle = open(argv[1], O_RDONLY | O_NONBLOCK | O_NOCTTY);
+	if(entFileHandle < 0){
+		printf("<ERROR> Could not open the tty device, %s. Error %d: %s", argv[1], errno, strerror(errno));
+		exit_cleanup(-8);
 	}
 	
 	// Set serial interface attributes
 	struct termios tty;
-	if(tcgetattr(fd, &tty) != 0){
+	if(tcgetattr(entFileHandle, &tty) != 0){
 		printf("Could not get tty device attributes. Error %d: %s\r\n", errno, strerror(errno));
-		return 5;
+		exit_cleanup(-5);
 	}
 
 	// Set what we want the serial interface attributes to be
@@ -50,33 +52,29 @@ int main(int argc, char *argv[]){
 	tty.c_cflag &= ~CSTOPB; 
 	tty.c_cflag &= ~CRTSCTS;
 
-	if(tcsetattr(fd, TCSANOW, &tty) != 0){
+	if(tcsetattr(entFileHandle, TCSANOW, &tty) != 0){
 		printf("Could not set tty device attributes. Error %d: %s\r\n", errno, strerror(errno));
-		return 6;
+		exit_cleanup(-6);
 	}
 
 	// Assert and then clear DTR
 #ifdef __APPLE__
 	if(ioctl(entFileHandle, TIOCSDTR) != 0){
-		char logmessage[200];
-		sprintf(logmessage, "<ERROR> Could not assert DTR. Error %d: %s", errno, strerror(errno));
+		printf("<ERROR> Could not assert DTR. Error %d: %s", errno, strerror(errno));
 		exit_cleanup(-16);
 	}
 	if(ioctl(entFileHandle, TIOCCDTR) != 0){
-		char logmessage[200];
-		sprintf(logmessage, "<ERROR> Could not clear DTR. Error %d: %s", errno, strerror(errno));
+		printf("<ERROR> Could not clear DTR. Error %d: %s", errno, strerror(errno));
 		exit_cleanup(-17);
 	}
 #elif __linux
 	int setdtr = TIOCM_DTR;
 	if(ioctl(entFileHandle, TIOCMBIC, &setdtr) != 0){
-		char logmessage[200];
-		sprintf(logmessage, "<ERROR> Could not assert DTR. Error %d: %s", errno, strerror(errno));
+		printf("<ERROR> Could not assert DTR. Error %d: %s", errno, strerror(errno));
 		exit_cleanup(-16);
 	}
 	if(ioctl(entFileHandle, TIOCMBIS, &setdtr) != 0){
-		char logmessage[200];
-		sprintf(logmessage, "<ERROR> Could not clear DTR. Error %d: %s", errno, strerror(errno));
+		printf("<ERROR> Could not clear DTR. Error %d: %s", errno, strerror(errno));
 		exit_cleanup(-17);
 	}
 #endif
@@ -93,10 +91,10 @@ int main(int argc, char *argv[]){
 		num_bytes = 0;
 
 		// Check on how many bytes are available
-		ioctl(fd, FIONREAD, &num_bytes);
+		ioctl(entFileHandle, FIONREAD, &num_bytes);
 		if(num_bytes >= 128){
-			// Read two bytes from the serial port
-			int n = read(fd, buf, sizeof(buf));
+			// Read bytes from the serial port
+			int n = read(entFileHandle, buf, sizeof(buf));
 		
 			// Check for an error
 			if(n < 0){
@@ -109,19 +107,8 @@ int main(int argc, char *argv[]){
 			}
 			
 			// Read through the bytes
-			unsigned char i = 1;
-			for(; i < n; i+=2){
-				// If for some reason we get an EOF, quit.
-				if(buf[i-1] == EOF || buf[i] == EOF) return 0;
-				
-				// Deskew (whiten) the data by reading two bytes
-				result = deskew(&buf[i-1], &buf[i]);
-				
-				// If whitening threw away the bits, we'll get a -1, if we didn't lets output it.
-				if(result >= 0){
-					result += '0';
-					fwrite(&result, sizeof(result), 1, stdout);
-				}		
+			for(unsigned char i = 0; i < n; i++){
+				fwrite(&buf[i], 1, 1, stdout);
 			}
 		}else{
 			// Sleep for 100ms (non-blocking wait, lowers CPU time dramatically)
@@ -130,7 +117,7 @@ int main(int argc, char *argv[]){
 	}
 
 	// Close the file descriptor.
-	close(fd);
+	close(entFileHandle);
 
     return 0;
 }
