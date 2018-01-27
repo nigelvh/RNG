@@ -1,4 +1,4 @@
-/* (c) 2017 Nigel Vander Houwen */
+/* (c) 2018 Nigel Vander Houwen */
 
 #include <avr/io.h>
 #include <avr/wdt.h>
@@ -13,14 +13,13 @@
 #include <LUFA/Platform/Platform.h>
 
 char BYTE_IN = 0;
-uint8_t interactive = 0;
+uint8_t ident = 0;
+uint16_t ident_count = 0;
+uint8_t sample_count = 0;
 
-volatile char str [128];
-volatile uint8_t str_ready = 0;
-volatile uint8_t loop_byte = 0;
-volatile uint8_t loop_bit = 0;
-
-volatile unsigned int TCNT1_Reset = 60000;
+// 16000000/(65535-57535) = 2000/second
+// 16000000/(65535-49535) = 1000/second
+volatile unsigned int TCNT1_Reset = 49535;
 
 #ifdef __AVR_ATmega16U2__
 	void (*bootloader)(void) = 0x1800;
@@ -56,147 +55,119 @@ static FILE USBSerialStream;
 
 // Sampling Interrupt
 ISR(TIMER1_OVF_vect){
-  TCNT1 = TCNT1_Reset;
-  
-  //if(loop_bit == 0) str[loop_byte] = 0;
-  
-  // Grab sample
-  uint8_t working = ((PINC & 0b00000100) >> 2);
+	TCNT1 = TCNT1_Reset;
 
-  fputc((working + '0'), &USBSerialStream);
-  
-  //str[loop_byte] |= working << (7 - loop_bit);
-  
-  // Update position
-  /*
-  if(loop_bit < 7){
-  	loop_bit++;
-  }else{
-  	loop_bit = 0;
-  	loop_byte++;
-  	
-  	if(loop_byte > 127){
-  	  loop_byte = 0;
-  	  str_ready = 1;
-  	}
-  }
-  */
+	// Grab sample
+	fputc((((PINC & 0b00000100) >> 2) + '0'), &USBSerialStream);
+
+	// Blink led
+	if (sample_count == 0) PORTD ^= 0b00010000;
+	sample_count++;
 }
 
 // Main program entry point.
 int main(void){
-  // Disable watchdog if enabled by bootloader/fuses
-  MCUSR &= ~(1 << WDRF);
-  wdt_disable();
+	// Disable watchdog if enabled by bootloader/fuses
+	MCUSR &= ~(1 << WDRF);
+	wdt_disable();
 
-  // Disable clock division
-  clock_prescale_set(clock_div_1);
+	// Disable clock division
+	clock_prescale_set(clock_div_1);
 
-  // Set up timer 1
-  TCCR1A = 0b00000000; // No pin changes on compare match
-  TCCR1B = 0b00000001; // Clock /1
-  TCCR1C = 0b00000000; // No forced output compare
-  TCNT1 = 0;
-  TIMSK1 = 0b00000001; // Enable interrupts on the A compare match
+	// Set up timer 1
+	TCCR1A = 0b00000000; // No pin changes on compare match
+	TCCR1B = 0b00000001; // Clock /1
+	TCCR1C = 0b00000000; // No forced output compare
+	TCNT1 = 0;
+	TIMSK1 = 0b00000000; // No interrupts yet
 
-  // Set the LED pins on Port D as output, and default the LED pins to LOW (off)
-  DDRD = 0b00110000;
-  PORTD = 0b00000000;
+	// Set the LED pins on Port D as output, and default the LED pins to LOW (off)
+	DDRD = 0b00110000;
+	PORTD = 0b00000000;
 
-  // Set Entropy pin to input
-  DDRC = DDRC & 0b11111011;
+	// Set Entropy pin to input
+	DDRC = DDRC & 0b11111011;
 
-  // Hardware Initialization
-  USB_Init();
+	// Hardware Initialization
+	USB_Init();
 
-  // Create a regular character stream for the interface so that it can be used with the stdio.h functions
-  CDC_Device_CreateStream(&VirtualSerial_CDC_Interface, &USBSerialStream);
+	// Create a regular character stream for the interface so that it can be used with the stdio.h functions
+	CDC_Device_CreateStream(&VirtualSerial_CDC_Interface, &USBSerialStream);
 
-  // Enable interrupts
-  GlobalInterruptEnable();
+	// Enable interrupts
+	GlobalInterruptEnable();
 
-  for (;;){  
-	if(str_ready && !interactive){
-	  str_ready = 0;
-	  //TIMSK1 = 0b00000000; // DEBUG
+	// Enable the sampling interrupt
+	TIMSK1 = 0b00000001; // Enable interrupts on overflow
+
+	for (;;){
+		// Read a byte from the USB serial stream
+		BYTE_IN = CDC_Device_ReceiveByte(&VirtualSerial_CDC_Interface);
+
+		// USB Serial stream will return <0 if no bytes are available.
+		if (BYTE_IN >= 0) {
+			if (BYTE_IN == 30) {
+				// Ctrl-^ jump into the bootloader
+				bootloader();
+				break; // We should never get here...
+			}
 	  
-	  // Blink LED1 as we gather entropy
-	  PORTD = PORTD | 0b00010000;
+			// '?' toggles ident LED flashing
+			if (BYTE_IN == '?') {
+				if (ident) {
+					ident = 0;
+		  		}else{
+		  			ident = 1;
+		  		}
+			}
 
-	  for (uint16_t i = 0; i < 128; i++) {
-	  	fputc(str[i], &USBSerialStream);
-	  }
-  	  // Send the string out the USB Serial stream.
-	  //fputs(str, &USBSerialStream);
+			// '+' and '-' bump up and down the TCNT1_Reset value, speeding up and down the sampling
+			if (BYTE_IN == '+') {
+				TCNT1_Reset += 100;
+				fprintf(&USBSerialStream, "\r\n\r\n%u\r\n\r\n", TCNT1_Reset);
+			}
+			if (BYTE_IN == '-') {
+				TCNT1_Reset -= 100;
+				fprintf(&USBSerialStream, "\r\n\r\n%u\r\n\r\n", TCNT1_Reset);
+			}
+		}
 
-      // Un-blink LED1
-  	  PORTD = PORTD & 0b11101111;
-  	}
+		if (ident) {
+			if (ident_count == 0) {
+				PORTD ^= 0b00100000;
+			}
+			ident_count++;
+		}
 
-	// Read a byte from the USB serial stream
-	BYTE_IN = CDC_Device_ReceiveByte(&VirtualSerial_CDC_Interface);
-
-	// USB Serial stream will return <0 if no bytes are available.
-	if (BYTE_IN >= 0) {
-	  if (BYTE_IN == 30) {
-		// Ctrl-^ jump into the bootloader
-		bootloader();
-		break; // We should never get here...
-	  }
-	  
-	  if (BYTE_IN == '0') { // DEBUG
-	  	TIMSK1 = 0b00000001;
-	  }
-	  
-	  // '?' toggles random data output to help with interactive sessions
-	  if (BYTE_IN == '?') {
-	  	if (interactive) {
-	  	  interactive = 0;
-	  	}else{
-	  	  interactive = 1;
-	  	}
-	  }
-	  
-	  // '+' and '-' bump up and down the TCNT1_Reset value, speeding up and down the sampling
-	  if (BYTE_IN == '+') {
-	  	TCNT1_Reset += 100;
-	  	fprintf(&USBSerialStream, "\r\n\r\n%d\r\n\r\n", TCNT1_Reset);
-	  }
-	  if (BYTE_IN == '-') {
-	  	TCNT1_Reset -= 100;
-	  	fprintf(&USBSerialStream, "\r\n\r\n%d\r\n\r\n", TCNT1_Reset);
-	  }
+		// Run the LUFA stuff
+    	CDC_Device_USBTask(&VirtualSerial_CDC_Interface);
+    	USB_USBTask();
 	}
-
-	// Run the LUFA stuff
-    CDC_Device_USBTask(&VirtualSerial_CDC_Interface);
-    USB_USBTask();
-  }
 }
 
 // Event handler for the library USB Connection event.
 void EVENT_USB_Device_Connect(void){
-  // Turn on LED2 to indicate we're enumerated.
-  PORTD = PORTD | 0b00100000;
+	// Turn on LED2 to indicate we're enumerated.
+	PORTD = PORTD | 0b00100000;
 }
 
 // Event handler for the library USB Disconnection event.
 void EVENT_USB_Device_Disconnect(void){
-  // Turn off the first LED to indicate we're not enumerated.
-  PORTD = PORTD & 0b11011111;
+	// Turn off the first LED to indicate we're not enumerated.
+	PORTD = PORTD & 0b11011111;
 }
 
 // Event handler for the library USB Configuration Changed event.
 void EVENT_USB_Device_ConfigurationChanged(void){
-  bool ConfigSuccess = true;
-  ConfigSuccess &= CDC_Device_ConfigureEndpoints(&VirtualSerial_CDC_Interface);
+	bool ConfigSuccess = true;
+	ConfigSuccess &= CDC_Device_ConfigureEndpoints(&VirtualSerial_CDC_Interface);
 
-  // Set the second LED to indicate USB is ready or not.
-  if(ConfigSuccess){
+	// Set the second LED to indicate USB is ready or not.
+	if(ConfigSuccess){
 
-  }else{
+	}else{
 
-  }
+	}
 }
 
 // Event handler for the library USB Control Request reception event.
