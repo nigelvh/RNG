@@ -371,8 +371,8 @@ int main(int argc, char *argv[]) {
 							
 							// Estimate Shannon's entropy
 							est_ent = 0.0;
-							est_ent -= (1.0 * num_zeros / sizeof(buf_whitened)) * log2f((1.0 * num_zeros / sizeof(buf_whitened)));
-							est_ent -= (1.0 * num_ones / sizeof(buf_whitened)) * log2f((1.0 * num_ones / sizeof(buf_whitened)));
+							est_ent -= (1.0 * num_zeros / sizeof(buf_whitened)) * log2((1.0 * num_zeros / sizeof(buf_whitened)));
+							est_ent -= (1.0 * num_ones / sizeof(buf_whitened)) * log2((1.0 * num_ones / sizeof(buf_whitened)));
 							
 							// Print our estimation of entropy
 							char logmessage[200];

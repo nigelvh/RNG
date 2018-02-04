@@ -19,6 +19,8 @@ the first argument.
 
 	sudo ./k7nvh_rng /dev/tty.usbmodemfd1311
 	
+Note that the path to the device will vary based on what type of system the device is connected to. You may see it appear as a /dev/ttyACM device on linux distributions or /dev/tty.usbmodemfd on OSX based systems. /dev/tty.usbmodemfd1311 is included above as an example.
+	
 The software will daemonize, and will create/make use of three files on your system.
 	
 	/var/log/k7nvh_rng.log
