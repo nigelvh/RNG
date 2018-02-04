@@ -15,11 +15,7 @@
 char BYTE_IN = 0;
 uint8_t ident = 0;
 uint16_t ident_count = 0;
-uint8_t sample_count = 0;
-
-// 16000000/(65535-57535) = 2000/second
-// 16000000/(65535-49535) = 1000/second
-volatile unsigned int TCNT1_Reset = 49535;
+uint16_t sample_count = 0;
 
 #ifdef __AVR_ATmega16U2__
 	void (*bootloader)(void) = 0x1800;
@@ -53,18 +49,6 @@ USB_ClassInfo_CDC_Device_t VirtualSerial_CDC_Interface = {
 // Standard file stream for the CDC interface when set up, so that the virtual CDC COM port can be used like any regular character stream in the C APIs.
 static FILE USBSerialStream;
 
-// Sampling Interrupt
-ISR(TIMER1_OVF_vect){
-	TCNT1 = TCNT1_Reset;
-
-	// Grab sample
-	fputc((((PINC & 0b00000100) >> 2) + '0'), &USBSerialStream);
-
-	// Blink led
-	if (sample_count == 0) PORTD ^= 0b00010000;
-	sample_count++;
-}
-
 // Main program entry point.
 int main(void){
 	// Disable watchdog if enabled by bootloader/fuses
@@ -73,13 +57,6 @@ int main(void){
 
 	// Disable clock division
 	clock_prescale_set(clock_div_1);
-
-	// Set up timer 1
-	TCCR1A = 0b00000000; // No pin changes on compare match
-	TCCR1B = 0b00000001; // Clock /1
-	TCCR1C = 0b00000000; // No forced output compare
-	TCNT1 = 0;
-	TIMSK1 = 0b00000000; // No interrupts yet
 
 	// Set the LED pins on Port D as output, and default the LED pins to LOW (off)
 	DDRD = 0b00110000;
@@ -97,10 +74,14 @@ int main(void){
 	// Enable interrupts
 	GlobalInterruptEnable();
 
-	// Enable the sampling interrupt
-	TIMSK1 = 0b00000001; // Enable interrupts on overflow
-
 	for (;;){
+		// Grab sample
+		fputc((((PINC & 0b00000100) >> 2) + '0'), &USBSerialStream);
+
+		// Blink led
+		if (sample_count == 0) PORTD ^= 0b00010000;
+		sample_count++;
+	
 		// Read a byte from the USB serial stream
 		BYTE_IN = CDC_Device_ReceiveByte(&VirtualSerial_CDC_Interface);
 
@@ -119,16 +100,6 @@ int main(void){
 		  		}else{
 		  			ident = 1;
 		  		}
-			}
-
-			// '+' and '-' bump up and down the TCNT1_Reset value, speeding up and down the sampling
-			if (BYTE_IN == '+') {
-				TCNT1_Reset += 100;
-				fprintf(&USBSerialStream, "\r\n\r\n%u\r\n\r\n", TCNT1_Reset);
-			}
-			if (BYTE_IN == '-') {
-				TCNT1_Reset -= 100;
-				fprintf(&USBSerialStream, "\r\n\r\n%u\r\n\r\n", TCNT1_Reset);
 			}
 		}
 
