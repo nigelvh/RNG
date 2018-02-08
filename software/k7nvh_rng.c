@@ -1,3 +1,5 @@
+/* Compile: gcc -Wall -O k7nvh_rng.c -o k7nvh_rng -lm -std=gnu99 */
+
 #include <sys/types.h>
 #include <sys/stat.h>
 #include <stdio.h>
@@ -16,36 +18,47 @@
 	#include <linux/random.h>
 #endif
 
+// Enable Debug Logging
+//#define debug
 
-// Debug
-int debug = 0;
-int file_output = 1;
+// Output to file instead of kernel entropy pool
+#define file_output
+
+// Define AMLS info
+#define amls_array_len 512
 
 // Define some directories
 #define pidfile "/tmp/k7nvh_rng.pid"
 #define logfile "/var/log/k7nvh_rng.log"
 #define outfile "/tmp/k7nvh_rng_out"
 #define rndfile "/dev/random"
-#define rundir "/"
+#define rundir  "/"
 
 // File handles
 int pidFileHandle;
 int logFileHandle;
 int entFileHandle;
+#ifdef file_output
 int outFileHandle;
+#else
 int rndFileHandle;
+#endif
+
+// Log message working space
+char logmessage[1000];
 
 // Buffer and state regarding reading from serial device
-char buf [128] = {0};
-int result = 0;
+char buf [512] = {0};
+int buf_pos = 0;
 int num_bytes = 0;
 
 // Buffer and state regarding whitening data
-char buf_whitened [512] = {0};
+unsigned char buf_whitened [1024] = {0};
 int buf_whitened_pos = 0;
+int buf_whitened_bit = 0;
 
 // Entropy estimation variables
-int ent_est_interval = 300;
+int ent_est_interval = 60;
 int test_ent = 0;
 int num_ones = 0;
 int num_zeros = 0;
@@ -53,18 +66,28 @@ float average = 0.0;
 float est_ent = 0.0;
 int ent_count = 0;
 
+// Biased stats variables
+int biased_num_ones = 0;
+int biased_num_zeros = 0;
+float biased_average = 0;
+
+// Close out file handles before exiting
 void exit_cleanup(int value){
 	// Close file handles before exit
 	if(pidFileHandle > 0) close(pidFileHandle);
     if(logFileHandle > 0) close(logFileHandle);
     if(entFileHandle > 0) close(entFileHandle);
+#ifdef file_output
     if(outFileHandle > 0) close(outFileHandle);
+#else
     if(rndFileHandle > 0) close(rndFileHandle);
-    
+#endif
+	
     // Actually exit
     exit(value);
 }
 
+// Takes in string to be logged into logFileHandle
 void log_message(char *message){
 	time_t rawtime;
 	struct tm * timeinfo;
@@ -75,16 +98,23 @@ void log_message(char *message){
 	
 	char logentry[1024];
 	sprintf(logentry, "%s K7NVH_RNG[%d]: %s\r\n", timestr, getpid(), message);
-	write(logFileHandle, &logentry, strlen(logentry));
+	long m = write(logFileHandle, &logentry, strlen(logentry));
+	if (m < 0) {
+		sprintf(logmessage, "<ERROR> Error writing to log file. Error %d: %s", errno, strerror(errno));
+		log_message(logmessage);
+		exit_cleanup(-12);
+	}
 }
 
+// Handles external signals to the process
 void signal_handler(int sig){
-	char logmessage[200];
 	signal(sig, signal_handler);
 
     switch(sig){
     	case SIGALRM:
-    		if(debug > 0) log_message("<DEBUG> Received SIGALRM signal.");
+#ifdef debug
+    		log_message("<DEBUG> Received SIGALRM signal.");
+#endif
     		test_ent = 1;
     		break;
         case SIGHUP:
@@ -102,13 +132,87 @@ void signal_handler(int sig){
     }
 }
 
-int deskew(char *c1, char *c2){
-        if (*c1 == '0' && *c2 == '1')
-        	return 0;
-        else if (*c1 == '1' && *c2 == '0')
-            return 1;
-        else
-			return -1;
+// Advanced Multi-Level Strategy based on http://www.eecs.harvard.edu/~michaelm/coinflipext.pdf
+// Expects input array of ints containing values of 0 or 1. Maximum length determined by amls_array_len
+// Returns pointer to array of ints containing values of 0 or 1, -1 value will indicate end of data
+// Returned array pointer must be freed after use
+char * amls(char data[], int data_len) {
+	// Set up 'result' array
+	char *result;
+	result = malloc(amls_array_len * sizeof(char));
+	memset(result, -1, amls_array_len * sizeof(char));
+	int result_pos = 0;
+	
+	// Set up 'level_1' array
+	char *level_1;
+	level_1 = malloc(amls_array_len * sizeof(char));
+	memset(result, -1, amls_array_len * sizeof(char));
+	int level_1_pos = 0;
+	
+	// Set up 'level_a' array
+	char *level_a;
+	level_a = malloc(amls_array_len * sizeof(char));
+	memset(result, -1, amls_array_len * sizeof(char));
+	int level_a_pos = 0;
+	
+	// Input bits
+	char bit_0 = -1;
+	
+	// Check that we've got at least two bits to compare
+	if (data_len < 2){
+		free(level_1);
+		free(level_a);
+		
+		return result;
+	}
+	
+	// Process through the input data
+	for (int i = 0; i < data_len; i++) {
+		if (data[i] != 0 && data[i] != 1) break; // If we encounter a non-0 or 1 bit, stop
+		
+		if (bit_0 == -1) { // Skip a cycle to grab two bits at a time
+			bit_0 = data[i];
+		} else { // We've got two bits, do the processing
+			if (bit_0 == data[i]) {
+				level_a[level_a_pos] = 0;
+				level_a_pos++;
+				
+				level_1[level_1_pos] = bit_0;
+				level_1_pos++;
+			} else {
+				level_a[level_a_pos] = 1;
+				level_a_pos++;
+				
+				result[result_pos] = bit_0;
+				result_pos++;
+			}
+			
+			// Reset bit_0
+			bit_0 = -1;
+		}
+	}
+	
+	// Run AMLS on the level_a and level_1 arrays, then append their results to the main results array
+	char *level_a_result = amls(level_a, level_a_pos);
+	char *level_1_result = amls(level_1, level_1_pos);
+	for (int i = 0; i < amls_array_len; i++) {
+		if (level_a_result[i] == -1) break;
+		result[result_pos] = level_a_result[i];
+		result_pos++;
+	}
+	for (int i = 0; i < amls_array_len; i++) {
+		if (level_1_result[i] == -1) break;
+		result[result_pos] = level_1_result[i];
+		result_pos++;
+	}
+	
+	// Free the allocated memory that's not used anymore
+	free(level_a_result);
+	free(level_1_result);
+	free(level_a);
+	free(level_1);
+	
+	return result;
 }
 
 int main(int argc, char *argv[]) {
@@ -173,8 +277,13 @@ int main(int argc, char *argv[]) {
     // Write PID to the PID file
     char str[10];
     sprintf(str, "%d\n", getpid());
-    write(pidFileHandle, str, strlen(str));
-            
+    long o = write(pidFileHandle, str, strlen(str));
+	if (o < 0) {
+		sprintf(logmessage, "<ERROR> Error writing to PID file. Error %d: %s", errno, strerror(errno));
+		log_message(logmessage);
+		exit_cleanup(-13);
+	}
+	
     // Close out the standard file descriptors
     close(STDIN_FILENO);
     close(STDOUT_FILENO);
@@ -190,7 +299,6 @@ int main(int argc, char *argv[]) {
 	// Try opening the tty device, and error if we can't.
 	entFileHandle = open(argv[1], O_RDONLY | O_NONBLOCK | O_NOCTTY);
 	if(entFileHandle < 0){
-		char logmessage[200];
 		sprintf(logmessage, "<ERROR> Could not open the tty device, %s. Error %d: %s", argv[1], errno, strerror(errno));
 		log_message(logmessage);
 		exit_cleanup(-8);
@@ -199,7 +307,6 @@ int main(int argc, char *argv[]) {
 	// Read serial interface attributes
 	struct termios tty;
 	if(tcgetattr(entFileHandle, &tty) != 0){
-		char logmessage[200];
 		sprintf(logmessage, "<ERROR> Could not get the tty device attributes. Error %d: %s", errno, strerror(errno));
 		log_message(logmessage);
 		exit_cleanup(-13);
@@ -218,7 +325,6 @@ int main(int argc, char *argv[]) {
 
 	// Set the serial interface attributes
 	if(tcsetattr(entFileHandle, TCSANOW, &tty) != 0){
-		char logmessage[200];
 		sprintf(logmessage, "<ERROR> Could not set the tty device attributes. Error %d: %s", errno, strerror(errno));
 		log_message(logmessage);
 		exit_cleanup(-14);
@@ -227,13 +333,11 @@ int main(int argc, char *argv[]) {
 	// Assert and then clear DTR
 #ifdef __APPLE__
 	if(ioctl(entFileHandle, TIOCSDTR) != 0){
-		char logmessage[200];
 		sprintf(logmessage, "<ERROR> Could not assert DTR. Error %d: %s", errno, strerror(errno));
 		log_message(logmessage);
 		exit_cleanup(-16);
 	}
 	if(ioctl(entFileHandle, TIOCCDTR) != 0){
-		char logmessage[200];
 		sprintf(logmessage, "<ERROR> Could not clear DTR. Error %d: %s", errno, strerror(errno));
 		log_message(logmessage);
 		exit_cleanup(-17);
@@ -241,13 +345,11 @@ int main(int argc, char *argv[]) {
 #elif __linux
 	int setdtr = TIOCM_DTR;
 	if(ioctl(entFileHandle, TIOCMBIC, &setdtr) != 0){
-		char logmessage[200];
 		sprintf(logmessage, "<ERROR> Could not assert DTR. Error %d: %s", errno, strerror(errno));
 		log_message(logmessage);
 		exit_cleanup(-16);
 	}
 	if(ioctl(entFileHandle, TIOCMBIS, &setdtr) != 0){
-		char logmessage[200];
 		sprintf(logmessage, "<ERROR> Could not clear DTR. Error %d: %s", errno, strerror(errno));
 		log_message(logmessage);
 		exit_cleanup(-17);
@@ -255,33 +357,29 @@ int main(int argc, char *argv[]) {
 #endif
 	
 	// Temporarily send data to a file rather than the entropy pool
-	if(file_output > 0){
-		char logmessage[200];
-		sprintf(logmessage, "<INFO> Saving generated entropy to %s in lieu of kernel pool.", outfile);
-		log_message(logmessage);
+#ifdef file_output
+	sprintf(logmessage, "<INFO> Saving generated entropy to %s in lieu of kernel pool.", outfile);
+	log_message(logmessage);
 			
-		outFileHandle = open(outfile, O_RDWR|O_CREAT|O_APPEND, 0644);
-		if(outFileHandle < 0){
-			char logmessage[200];
-			sprintf(logmessage, "<ERROR> Could not open output file. Error %d: %s", errno, strerror(errno));
-			log_message(logmessage);
-			exit_cleanup(-11);
-		}
-	}else{
-		log_message("<INFO> File output disabled. Saving generated entropy to kernel pool.");
-		
-		rndFileHandle = open(rndfile, O_RDWR);
-		if(rndFileHandle < 0){
-			char logmessage[200];
-			sprintf(logmessage, "<ERROR> Could not open the %s device. Error %d: %s", rndfile, errno, strerror(errno));
-			log_message(logmessage);
-			exit_cleanup(-18);
-		}
+	outFileHandle = open(outfile, O_RDWR|O_CREAT|O_APPEND, 0644);
+	if(outFileHandle < 0){
+		sprintf(logmessage, "<ERROR> Could not open output file. Error %d: %s", errno, strerror(errno));
+		log_message(logmessage);
+		exit_cleanup(-11);
 	}
+#else
+	log_message("<INFO> File output disabled. Saving generated entropy to kernel pool.");
+		
+	rndFileHandle = open(rndfile, O_RDWR);
+	if(rndFileHandle < 0){
+		sprintf(logmessage, "<ERROR> Could not open the %s device. Error %d: %s", rndfile, errno, strerror(errno));
+		log_message(logmessage);
+		exit_cleanup(-18);
+	}
+#endif
 
 	// Set up an alarm so we periodically test the quality of our entropy
 	alarm(ent_est_interval);
-	char logmessage[200];
 	sprintf(logmessage, "<INFO> Next estimation of entropy in %d seconds.", ent_est_interval);
 	log_message(logmessage);
 
@@ -289,196 +387,192 @@ int main(int argc, char *argv[]) {
     
     // The Big Loop
     while (1) {
-        // Reset our variables.
-		result = -1;
+#ifdef debug
+		log_message("<DEBUG> Main loop...");
+#endif
+		
+		// Check if we're scheduled to print a statistics test
+		if (test_ent) {
+#ifdef debug
+			log_message("<DEBUG> Scheduled entropy stats.");
+#endif
+			
+			// Calculate the average
+			average = (float)num_ones / (float)(num_ones + num_zeros);
+			biased_average = (float)biased_num_ones / (float)(biased_num_ones + biased_num_zeros);
+			
+			// Estimate Shannon's entropy
+			// Estimates the information density of the data. https://en.wikipedia.org/wiki/Shannon%27s_source_coding_theorem
+			est_ent = 0.0;
+			est_ent -= (1.0 * num_zeros / (num_zeros + num_ones)) * log2((1.0 * num_zeros / (num_zeros + num_ones)));
+			est_ent -= (1.0 * num_ones / (num_zeros + num_ones)) * log2((1.0 * num_ones / (num_zeros + num_ones)));
+			
+			// Log our stats
+			sprintf(logmessage, "<INFO> %lu biased bits, Biased average: %f. %lu debiased bits, Average: %f. Est. Entropy: %f bits/bit. %d bytes generated in last %d seconds.", (long)(biased_num_zeros + biased_num_ones), biased_average, (long)(num_zeros + num_ones), average, est_ent, ent_count, ent_est_interval);
+			log_message(logmessage);
+			
+			// If we're on linux, we can also read the state of the entropy pool
+#ifdef __linux
+#ifndef file_output
+			int rndcount = 0;
+			if( ioctl(rndFileHandle, RNDGETENTCNT, &rndcount) < 0 ){
+				sprintf(logmessage, "Could not read the entropy count. Error %d: %s", errno, strerror(errno));
+				log_message(logmessage);
+				exit_cleanup(-20);
+			}
+			sprintf(logmessage, "<INFO> Linux kernel entropy pool has %d bits of entropy available.", rndcount);
+			log_message(logmessage);
+#endif
+#endif
+			
+			// Re-set our alarm so we periodically test the quality of our entropy
+			alarm(ent_est_interval);
+			
+			// Reset our state variables
+			test_ent = 0;
+			ent_count = 0;
+			num_zeros = 0;
+			num_ones = 0;
+			biased_num_zeros = 0;
+			biased_num_ones = 0;
+		}
+
+		// Reset our variables.
 		num_bytes = 0;
 		
-		if(debug > 0) log_message("<DEBUG> Main loop...");
-
 		// Check on how many bytes are available
 		ioctl(entFileHandle, FIONREAD, &num_bytes);
-		if(num_bytes >= sizeof(buf)){
-			if(debug > 0) log_message("<DEBUG> Reading bytes...");
 		
-			// Read sizeof(buf) bytes from the serial port
-			int n = read(entFileHandle, buf, sizeof(buf));
+#ifdef debug
+		sprintf(logmessage, "<DEBUG> Bytes available: %d", num_bytes);
+		log_message(logmessage);
+#endif
+		
+		if(num_bytes >= 128){
+			
+#ifdef debug
+			log_message("<DEBUG> Reading data.");
+#endif
+			
+			// Read bytes from the serial port
+			long n = read(entFileHandle, &buf[buf_pos], sizeof(buf[0]) * 128);
 		
 			// Check for an error
-			if(n < 0){
-				char logmessage[200];
-				sprintf(logmessage, "<ERROR> Error reading from tty device. Error %d: %s", errno, strerror(errno));
+			if(n != 128){
+				sprintf(logmessage, "<ERROR> Error reading from tty device. Num bytes: %ld. Error %d: %s", n, errno, strerror(errno));
 				log_message(logmessage);
 				exit_cleanup(-9);
 			}
-			if(n < sizeof(buf)){
-				char logmessage[200];
-				sprintf(logmessage, "<ERROR> Error reading from tty device. Fewer bytes than expected. Num bytes: %d", n);
-				log_message(logmessage);
-				exit_cleanup(-10);
-			}
 			
-			// Read through the bytes
-			int i = 1;
-			for(; i < n; i+=2){
-				if(debug > 0) log_message("<DEBUG> Processing bytes...");
+			// Increment our position
+			buf_pos += 128;
 			
-				// If for some reason we get an EOF, quit.
-				if(buf[i-1] == EOF || buf[i] == EOF) return 0;
+			// Wait till the buffer is full
+			if (buf_pos >= 512) {
+
+#ifdef debug
+				log_message("<DEBUG> Converting ASCII '1'/'0' to ints.");
+#endif
 				
-				// Deskew (whiten) the data by reading two bytes
-				result = deskew(&buf[i-1], &buf[i]);
-				
-				// If whitening threw away the bits, we'll get a -1, if we didn't lets output it.
-				if(result >= 0){
-					result += '0';
-					
-					buf_whitened[buf_whitened_pos] = result;
-					buf_whitened_pos++;
-					
-					if(debug > 0){
-						char logmessage[200];
-						sprintf(logmessage, "<DEBUG> buf_whitened_pos = %d", buf_whitened_pos);
+				// Convert ASCII bits into int 0 and 1 values, and sanity check the data
+				for (int i = 0; i < (sizeof(buf) / sizeof(buf[0])); i++) {
+					if (buf[i] != '0' && buf[i] != '1') {
+						sprintf(logmessage, "<ERROR> Invalid input data. Expect '0' and '1' only. Recieved: %d", buf[i]);
 						log_message(logmessage);
+						exit_cleanup(-11);
 					}
 					
-					// Check if our whitened buffer is full
-					if(buf_whitened_pos >= sizeof(buf_whitened)){
-						if(debug > 0){
-							char logmessage[600];
-							sprintf(logmessage, "<DEBUG> Writing %d bytes of whitened data to outfile.", buf_whitened_pos);
-							log_message(logmessage);
-						}
+					buf[i] = buf[i] - '0';
 					
-						// If we're scheduled to check the quality of the entropy, do this stuff
-						if(test_ent > 0){
-							if(debug > 0) log_message("<DEBUG> Caught condition to test entropy.");
-							
-							// Count the number of 0's and 1's in our sample
-							int n = 0;
-							average = 0.0;
-							num_zeros = 0;
-							num_ones = 0;
-							for(; n < sizeof(buf_whitened); n++){
-								if(buf_whitened[n] == '1'){
-									num_ones++;
-								}else{
-									num_zeros++;
-								}
-							}
-							
-							// Calculate our average before moving onto estimating entropy
-							average = (float)num_ones / (float)sizeof(buf_whitened);
-							
-							// Estimate Shannon's entropy
-							est_ent = 0.0;
-							est_ent -= (1.0 * num_zeros / sizeof(buf_whitened)) * log2((1.0 * num_zeros / sizeof(buf_whitened)));
-							est_ent -= (1.0 * num_ones / sizeof(buf_whitened)) * log2((1.0 * num_ones / sizeof(buf_whitened)));
-							
-							// Print our estimation of entropy
-							char logmessage[200];
-							sprintf(logmessage, "<INFO> %lu bit sample: Average: %f, Est. Entropy: %f bits/bit. %d bytes generated in last %d seconds.", (long)sizeof(buf_whitened), average, est_ent, ent_count, ent_est_interval);
-							log_message(logmessage);
-							
-							// If we're on linux, we can also read the state of the entropy pool
-							#ifdef __linux
-								if(file_output < 1){
-									int rndcount = 0;
-									if( ioctl(rndFileHandle, RNDGETENTCNT, &rndcount) < 0 ){
-										char logmessage[200];
-										sprintf(logmessage, "Could not read the entropy count. Error %d: %s", errno, strerror(errno));
-										log_message(logmessage);
-										exit_cleanup(-20);
-									}
-									sprintf(logmessage, "<INFO> Linux kernel entropy pool has %d bits of entropy available.", rndcount);
-									log_message(logmessage);
-								}
-							#endif
-							
-							// Re-set our alarm so we periodically test the quality of our entropy
-							alarm(ent_est_interval);
-	
-							// Reset our state variable
-							test_ent = 0;
-							ent_count = 0;
-						}else{
-							int o = 0; 
-							for(; o < sizeof(buf_whitened); o += 8){
-								if(debug > 0){
-									char logmessage[600];
-									sprintf(logmessage, "<DEBUG> Stuffing bits into bytes. Byte %d.", (o/8));
-									log_message(logmessage);
-								}
-								
-								// Stuff 8 bits together into a byte
-								int p = o;
-								char value = 0;
-								for(; p < o+8; p++){
-									if(buf_whitened[p] == '0'){
-										value = (value << 1) | 0;
-									}else{
-										value = (value << 1) | 1;
-									}
-								}
-								
-								if(debug > 0){
-									sprintf(logmessage, "<DEBUG> New byte stuffed. Int value %d.", value);
-									log_message(logmessage);
-								}
-								
-								ent_count++;
-								
-								// If we're supposed to write to a file, do that now, otherwise send to the kernel entropy pool
-								if(file_output > 0){
-									int m = write(outFileHandle, &value, sizeof(value));
-									if(m < 0){
-										char logmessage[200];
-										sprintf(logmessage, "<ERROR> Error writing to output file. Error %d: %s", errno, strerror(errno));
-										log_message(logmessage);
-										exit_cleanup(-15);
-									}
-								}else{
-									#ifdef __APPLE__
-										int m = write(rndFileHandle, &value, sizeof(value));
-										if(m < 0){
-											char logmessage[200];
-											sprintf(logmessage, "Error writing to %s device. Error %d: %s", rndfile, errno, strerror(errno));
-											log_message(logmessage);
-											exit_cleanup(-21);
-										}
-									#elif __linux
-										struct {
-											int ent_count;
-											int size;
-											unsigned char data[1024];
-										} entropy;	
-
-										entropy.data[0] = value;
-										entropy.size = 1;
-										entropy.ent_count = 8;
-										
-										if( ioctl(rndFileHandle, RNDADDENTROPY, &entropy) < 0){
-											char logmessage[200];
-											sprintf(logmessage, "<ERROR> Could not add entropy to the pool. Error %d: %s", errno, strerror(errno));
-											log_message(logmessage);
-											exit_cleanup(-19);
-										}
-									#endif
-								}
-							}
-						}
-						// Reset our buffer position variable
-						buf_whitened_pos = 0;
+					if (buf[i] == 0) {
+						biased_num_zeros++;
+					} else {
+						biased_num_ones++;
 					}
 				}
+
+#ifdef debug
+				log_message("<DEBUG> AMLS processing.");
+#endif
+				
+				// AMLS process the buf
+				char *amls_result = amls(buf, (sizeof(buf) / sizeof(buf[0])));
+
+#ifdef debug
+				log_message("<DEBUG> Collecting bits into bytes, mixing data, and writing out.");
+#endif
+				
+				// Convert bits from AMLS into bytes
+				for (int i = 0; i < (sizeof(buf) / (sizeof(buf[0]))); i++) {
+					if (amls_result[i] != 0 && amls_result[i] != 1) break;
+					
+					// Update our bit counts
+					if (amls_result[i] == 0) { num_zeros++; } else { num_ones++; }
+					
+					buf_whitened[buf_whitened_pos] |= (amls_result[i] << buf_whitened_bit);
+					buf_whitened_bit++;
+					if (buf_whitened_bit > 7) {
+						buf_whitened_bit = 0;
+						buf_whitened_pos++;
+					}
+					if (buf_whitened_pos >= (sizeof(buf_whitened) / sizeof(buf_whitened[0]))) {
+						for (int i = 0; i < ((sizeof(buf_whitened) / sizeof(buf_whitened[0])) / 2); i++) {
+							// XOR mix the debiased data
+							char value = buf_whitened[i] ^ buf_whitened[i+((sizeof(buf_whitened) / sizeof(buf_whitened[0])) / 2)];
+							
+							// Update the counter
+							ent_count++;
+
+							// Output the data
+#ifdef file_output
+							long m = write(outFileHandle, &value, sizeof(value));
+							if (m < 0) {
+								sprintf(logmessage, "<ERROR> Error writing to output file. Error %d: %s", errno, strerror(errno));
+								log_message(logmessage);
+								exit_cleanup(-15);
+							}
+#else
+#ifdef __APPLE__
+							int m = write(rndFileHandle, &value, sizeof(value));
+							if(m < 0){
+								sprintf(logmessage, "Error writing to %s device. Error %d: %s", rndfile, errno, strerror(errno));
+								log_message(logmessage);
+								exit_cleanup(-21);
+							}
+#elif __linux
+							struct {
+								int ent_count;
+								int size;
+								unsigned char data[1024];
+							} entropy;
+							
+							entropy.data[0] = value;
+							entropy.size = 1;
+							entropy.ent_count = 8;
+							
+							if( ioctl(rndFileHandle, RNDADDENTROPY, &entropy) < 0){
+								sprintf(logmessage, "<ERROR> Could not add entropy to the pool. Error %d: %s", errno, strerror(errno));
+								log_message(logmessage);
+								exit_cleanup(-19);
+							}
+#endif
+#endif
+						}
+						
+						// Reset some variables
+						buf_whitened_pos = 0;
+						memset(buf_whitened, 0, (sizeof(buf_whitened) / sizeof(buf_whitened[0])));
+					}
+				}
+				
+				// Free the memory AMLS used for this block of data
+				free(amls_result);
+				
+				buf_pos = 0;
 			}
 		}else{
 			// Sleep for 250ms (non-blocking wait, lowers CPU time dramatically)
-			if(debug > 0) log_message("<DEBUG> Sleeping...");
 			usleep(250*1000);
 		}
     }
-    
-	// Clean up and exit
-	log_message("<ERROR> Reached end of program. We shouldn't be here...");
-	exit_cleanup(0);
 }

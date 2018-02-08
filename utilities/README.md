@@ -1,7 +1,8 @@
 K7NVH Random Number Generator Utilities
 =======
 
-These utilities are designed to help test various aspects of the K7NVH RNG.
+These utilities are designed to help test various aspects of the K7NVH RNG or other 
+software components.
 
 ascii_hex_to_bin.c
 ------------------
@@ -27,20 +28,29 @@ Which should output:
 
 	HI
 
-deskewing.c
+vonneumann.c
 -----------
 
-This utility reads a stream of ASCII binary characters ('1' and '0' from stdin, and 
-prints to stdout the whitened ASCII binary data.
+This utility reads a stream of raw binary data from stdin, and 
+prints to stdout the debiased binary data.
 
 Whitening is the simple, but effective von Neumann method.
 
-	echo -n "01000001010111010010101010111010" | ./deskewing
-	
-Which should output: 
+	echo -n "01000001010111010010101010111010" | ./ascii_to_bin | ./vonneumann
 
-	00000111111
-	
+amls.c
+------
+
+This utility reads a stream of ASCII '1' and '0' chars from stdin, then
+AMLS (Advanced Multi-Level Strategy) debiases them, and outputs ASCII '1' and '0' chars
+to stdout.
+
+xor512.c
+--------
+
+This utility reads a stream of raw binary data from stdin, XOR mixes 
+two 512 byte blocks together, and outputs the resulting data to stdout.
+
 distribution.c
 --------------
 
@@ -56,33 +66,14 @@ Output from this program is too long to reasonably include here.
 read_serial_port.c
 ------------------
 
-This utility reads ASCII binary from a serial port provided as the first argument to the 
-command, performs whitening on the captured data, and outputs the whitened ASCII binary 
-to stdout.
+This utility reads from a serial port provided as the first argument to the 
+command, and outputs to stdout.
 
 	./read_serial_port /dev/cu.usbmodemfa12111
 	
 Output from this program is both too long to reasonably include here, and will vary based 
 on input from the serial device, but should be composed of only ASCII '1' and '0' 
 characters.
-
-dfu-programmer
---------------
-
-This utility was precompiled for OSX with libusb installed. This provides programming 
-capability for the atmega16u2 microcontroller on the USB stick, using Atmel's FLIP 
-protocol.
-
-The device must first be placed in DFU mode by shorting the reset pin to ground 
-momentarily, after which, the device will be receptive to commands from dfu-programmer.
-
-	./dfu-programmer atmega16u2 erase
-	./dfu-programmer atmega16u2 flash RNG.hex
-	./dfu-programmer atmega16u2 start
-
-The device by default will boot into the normal program automatically. Running the 
-start command from DFU programmer is only needed to bring it out of DFU mode. This can 
-also be accomplished simply by unplugging the device, and plugging it back in.
 
 ent_pool.c
 ----------

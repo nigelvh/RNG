@@ -12,14 +12,17 @@ k7nvh_rng.c
 
 Compile the daemon with:
 	
-	gcc -lm -Wall -O k7nvh_rng.c -o k7nvh_rng
+	gcc -Wall -O k7nvh_rng.c -o k7nvh_rng -lm -std=gnu99
 	
 After which, you can run the created executable, with the path to the RNG device being 
 the first argument.
 
 	sudo ./k7nvh_rng /dev/tty.usbmodemfd1311
 	
-Note that the path to the device will vary based on what type of system the device is connected to. You may see it appear as a /dev/ttyACM device on linux distributions or /dev/tty.usbmodemfd on OSX based systems. /dev/tty.usbmodemfd1311 is included above as an example.
+Note that the path to the device will vary based on what type of system the device is 
+connected to. You may see it appear as a /dev/ttyACM device on linux distributions or 
+/dev/tty.usbmodemfd on OSX based systems. /dev/tty.usbmodemfd1311 is included above as 
+an example.
 	
 The software will daemonize, and will create/make use of three files on your system.
 	
@@ -37,8 +40,6 @@ These should look pretty familiar, but for clarity:
 /tmp/k7nvh_rng.pid
 
 	This is the pid/lock file for the daemon to ensure only one daemon runs at a time. 
-	The daemon will check if the file exists at start up, if it does not, it will be 
-	created. If it does exist, it will be opened, locked, and have the PID written to it.
 	
 /tmp/k7nvh_rng_out
 
@@ -49,5 +50,6 @@ By default, the software is configured to output entropy to the /tmp/k7nvh_rng_o
 the user to verify that the captured entropy is of sufficient quality. Use a entropy 
 testing software package like ent or dieharder on the resulting file to give things a test.
 
-When you are satisfied that the entropy is of good quality, change `int file_output = 1;` 
-to 0 to enable pushing entropy into the kernel pool rather than the output file.
+When you are satisfied that the entropy is of good quality, comment out 
+`#define file_output` near the top of the source code to enable pushing entropy into the 
+kernel pool rather than the output file.
