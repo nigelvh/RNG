@@ -533,7 +533,7 @@ int main(int argc, char *argv[]) {
 							}
 #else
 #ifdef __APPLE__
-							int m = write(rndFileHandle, &value, sizeof(value));
+							long m = write(rndFileHandle, &value, sizeof(value));
 							if(m < 0){
 								sprintf(logmessage, "Error writing to %s device. Error %d: %s", rndfile, errno, strerror(errno));
 								log_message(logmessage);
