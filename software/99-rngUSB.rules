@@ -1,0 +1,2 @@
+# /etc/udev/rules.d/99-rngUSB.rules
+SUBSYSTEM=="tty", ATTRS{manufacturer}=="K7NVH", ATTRS{product}=="RNG*", SYMLINK+="rngUSB%n"

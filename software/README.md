@@ -53,3 +53,12 @@ testing software package like ent or dieharder on the resulting file to give thi
 When you are satisfied that the entropy is of good quality, comment out 
 `#define file_output` near the top of the source code to enable pushing entropy into the 
 kernel pool rather than the output file.
+
+99-rngUSB.rules
+---------------
+
+This is a rules file for linux udev. Place it in /etc/udev/rules.d/ and when you plug in 
+the RNG devices, they'll get an alias under /dev/ as rngUSB<n>
+
+This is handy if you also use other USB serial devices where it may be troublesome to 
+determine which ttyACM<n> devices are RNGs and are not.
