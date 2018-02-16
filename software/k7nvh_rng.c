@@ -24,6 +24,10 @@
 // Output to file instead of kernel entropy pool
 #define file_output
 
+// Main loop sleep time (uSeconds)
+// Saves some CPU time instead of pegging a core checking if we've got new serial data
+#define SLEEP_TIME 1000
+
 // Define AMLS info
 #define amls_array_len 512
 
@@ -37,7 +41,6 @@
 // File handles
 int pidFileHandle;
 int logFileHandle;
-int entFileHandle;
 #ifdef file_output
 int outFileHandle;
 #else
@@ -66,17 +69,11 @@ float average = 0.0;
 float est_ent = 0.0;
 int ent_count = 0;
 
-// Biased stats variables
-int biased_num_ones = 0;
-int biased_num_zeros = 0;
-float biased_average = 0;
-
 // Close out file handles before exiting
 void exit_cleanup(int value){
 	// Close file handles before exit
 	if(pidFileHandle > 0) close(pidFileHandle);
     if(logFileHandle > 0) close(logFileHandle);
-    if(entFileHandle > 0) close(entFileHandle);
 #ifdef file_output
     if(outFileHandle > 0) close(outFileHandle);
 #else
@@ -218,7 +215,7 @@ char * amls(char data[], int data_len) {
 int main(int argc, char *argv[]) {
     // Check to ensure we've got an argument for the device we want to read from.
 	if(argc < 2){
-		printf("Please provide the tty device as an argument. EX: %s /dev/tty.usbSerial0\r\n", argv[0]);
+		printf("Please provide the tty device(s) as the argument(s). EX: %s /dev/tty.usbSerial0\r\n", argv[0]);
 		exit_cleanup(-7);
 	}
 
@@ -296,65 +293,72 @@ int main(int argc, char *argv[]) {
 	signal(SIGTERM, signal_handler);
     
     // Daemon-specific initialization goes here
-	// Try opening the tty device, and error if we can't.
-	entFileHandle = open(argv[1], O_RDONLY | O_NONBLOCK | O_NOCTTY);
-	if(entFileHandle < 0){
-		sprintf(logmessage, "<ERROR> Could not open the tty device, %s. Error %d: %s", argv[1], errno, strerror(errno));
-		log_message(logmessage);
-		exit_cleanup(-8);
-	}
-
-	// Read serial interface attributes
-	struct termios tty;
-	if(tcgetattr(entFileHandle, &tty) != 0){
-		sprintf(logmessage, "<ERROR> Could not get the tty device attributes. Error %d: %s", errno, strerror(errno));
-		log_message(logmessage);
-		exit_cleanup(-13);
-	}
-
-	// Set what we want the serial interface attributes to be
-	tty.c_cflag = (tty.c_cflag & ~CSIZE) | CS8; // 8 bit characters
-	tty.c_iflag &= ~IGNBRK; // Ignore Breaks
-	tty.c_lflag = 0;
-	tty.c_oflag = 0;
-	tty.c_iflag &= ~(IXON | IXOFF | IXANY); // Disable hardware flow control
-	tty.c_cflag |= (CLOCAL | CREAD); // Local control, enable reads
-	tty.c_cflag &= ~(PARENB | PARODD); // No parity
-	tty.c_cflag &= ~CSTOPB; 
-	tty.c_cflag &= ~CRTSCTS;
-
-	// Set the serial interface attributes
-	if(tcsetattr(entFileHandle, TCSANOW, &tty) != 0){
-		sprintf(logmessage, "<ERROR> Could not set the tty device attributes. Error %d: %s", errno, strerror(errno));
-		log_message(logmessage);
-		exit_cleanup(-14);
-	}
-
-	// Assert and then clear DTR
+	// Try opening the tty device(s), and error if we can't.
+	int entFileHandles [argc];
+	unsigned long deviceCounters [argc][2]; // [device][0's] and [1's]
+	for (int i = 1; i < argc; i++) {
+		deviceCounters[i-1][0] = 0;
+		deviceCounters[i-1][1] = 0;
+		
+		entFileHandles[i-1] = open(argv[i], O_RDONLY | O_NONBLOCK | O_NOCTTY);
+		if (entFileHandles[i-1] < 0) {
+			sprintf(logmessage, "<ERROR> Could not open the tty device, %s. Error %d: %s", argv[i], errno, strerror(errno));
+			log_message(logmessage);
+			exit_cleanup(-8);
+		}
+		
+		// Read serial interface attributes
+		struct termios tty;
+		if(tcgetattr(entFileHandles[i-1], &tty) != 0){
+			sprintf(logmessage, "<ERROR> Could not get the tty device attributes. Error %d: %s", errno, strerror(errno));
+			log_message(logmessage);
+			exit_cleanup(-13);
+		}
+		
+		// Set what we want the serial interface attributes to be
+		tty.c_cflag = (tty.c_cflag & ~CSIZE) | CS8; // 8 bit characters
+		tty.c_iflag &= ~IGNBRK; // Ignore Breaks
+		tty.c_lflag = 0;
+		tty.c_oflag = 0;
+		tty.c_iflag &= ~(IXON | IXOFF | IXANY); // Disable hardware flow control
+		tty.c_cflag |= (CLOCAL | CREAD); // Local control, enable reads
+		tty.c_cflag &= ~(PARENB | PARODD); // No parity
+		tty.c_cflag &= ~CSTOPB;
+		tty.c_cflag &= ~CRTSCTS;
+		
+		// Set the serial interface attributes
+		if(tcsetattr(entFileHandles[i-1], TCSANOW, &tty) != 0){
+			sprintf(logmessage, "<ERROR> Could not set the tty device attributes. Error %d: %s", errno, strerror(errno));
+			log_message(logmessage);
+			exit_cleanup(-14);
+		}
+		
+		// Assert and then clear DTR
 #ifdef __APPLE__
-	if(ioctl(entFileHandle, TIOCSDTR) != 0){
-		sprintf(logmessage, "<ERROR> Could not assert DTR. Error %d: %s", errno, strerror(errno));
-		log_message(logmessage);
-		exit_cleanup(-16);
-	}
-	if(ioctl(entFileHandle, TIOCCDTR) != 0){
-		sprintf(logmessage, "<ERROR> Could not clear DTR. Error %d: %s", errno, strerror(errno));
-		log_message(logmessage);
-		exit_cleanup(-17);
-	}
+		if(ioctl(entFileHandles[i-1], TIOCSDTR) != 0){
+			sprintf(logmessage, "<ERROR> Could not assert DTR. Error %d: %s", errno, strerror(errno));
+			log_message(logmessage);
+			exit_cleanup(-16);
+		}
+		if(ioctl(entFileHandles[i-1], TIOCCDTR) != 0){
+			sprintf(logmessage, "<ERROR> Could not clear DTR. Error %d: %s", errno, strerror(errno));
+			log_message(logmessage);
+			exit_cleanup(-17);
+		}
 #elif __linux
-	int setdtr = TIOCM_DTR;
-	if(ioctl(entFileHandle, TIOCMBIC, &setdtr) != 0){
-		sprintf(logmessage, "<ERROR> Could not assert DTR. Error %d: %s", errno, strerror(errno));
-		log_message(logmessage);
-		exit_cleanup(-16);
-	}
-	if(ioctl(entFileHandle, TIOCMBIS, &setdtr) != 0){
-		sprintf(logmessage, "<ERROR> Could not clear DTR. Error %d: %s", errno, strerror(errno));
-		log_message(logmessage);
-		exit_cleanup(-17);
-	}
+		int setdtr = TIOCM_DTR;
+		if(ioctl(entFileHandles[i-1], TIOCMBIC, &setdtr) != 0){
+			sprintf(logmessage, "<ERROR> Could not assert DTR. Error %d: %s", errno, strerror(errno));
+			log_message(logmessage);
+			exit_cleanup(-16);
+		}
+		if(ioctl(entFileHandles[i-1], TIOCMBIS, &setdtr) != 0){
+			sprintf(logmessage, "<ERROR> Could not clear DTR. Error %d: %s", errno, strerror(errno));
+			log_message(logmessage);
+			exit_cleanup(-17);
+		}
 #endif
+	}
 	
 	// Temporarily send data to a file rather than the entropy pool
 #ifdef file_output
@@ -399,8 +403,7 @@ int main(int argc, char *argv[]) {
 			
 			// Calculate the average
 			average = (float)num_ones / (float)(num_ones + num_zeros);
-			biased_average = (float)biased_num_ones / (float)(biased_num_ones + biased_num_zeros);
-			
+
 			// Estimate Shannon's entropy
 			// Estimates the information density of the data. https://en.wikipedia.org/wiki/Shannon%27s_source_coding_theorem
 			est_ent = 0.0;
@@ -408,8 +411,18 @@ int main(int argc, char *argv[]) {
 			est_ent -= (1.0 * num_ones / (num_zeros + num_ones)) * log2((1.0 * num_ones / (num_zeros + num_ones)));
 			
 			// Log our stats
-			sprintf(logmessage, "<INFO> %lu biased bits, Biased average: %f. %lu debiased bits, Average: %f. Est. Entropy: %f bits/bit. %d bytes generated in last %d seconds.", (long)(biased_num_zeros + biased_num_ones), biased_average, (long)(num_zeros + num_ones), average, est_ent, ent_count, ent_est_interval);
+			sprintf(logmessage, "<INFO> %lu debiased bits, Average: %f. Est. Entropy: %f bits/bit. %d bytes generated in last %d seconds.", (long)(num_zeros + num_ones), average, est_ent, ent_count, ent_est_interval);
 			log_message(logmessage);
+			
+			// Per device stats
+			for (int i = 0; i < (argc - 1); i++) {
+				float biased_average = (float)deviceCounters[i][1] / (float)(deviceCounters[i][1] + deviceCounters[i][0]);
+				sprintf(logmessage, "<INFO> %s: %lu bits. Biased average: %f.", argv[i+1], (long)(deviceCounters[i][0] + deviceCounters[i][1]), biased_average);
+				log_message(logmessage);
+				
+				deviceCounters[i][0] = 0;
+				deviceCounters[i][1] = 0;
+			}
 			
 			// If we're on linux, we can also read the state of the entropy pool
 #ifdef __linux
@@ -433,146 +446,145 @@ int main(int argc, char *argv[]) {
 			ent_count = 0;
 			num_zeros = 0;
 			num_ones = 0;
-			biased_num_zeros = 0;
-			biased_num_ones = 0;
 		}
-
-		// Reset our variables.
-		num_bytes = 0;
 		
-		// Check on how many bytes are available
-		ioctl(entFileHandle, FIONREAD, &num_bytes);
-		
-#ifdef debug
-		sprintf(logmessage, "<DEBUG> Bytes available: %d", num_bytes);
-		log_message(logmessage);
-#endif
-		
-		if(num_bytes >= 128){
+		// Read from each rng device
+		for (int i = 0; i < (argc - 1); i++) {
+			// Reset our variables.
+			num_bytes = 0;
+			
+			// Check how many bytes are available
+			ioctl(entFileHandles[i], FIONREAD, &num_bytes);
 			
 #ifdef debug
-			log_message("<DEBUG> Reading data.");
+			sprintf(logmessage, "<DEBUG> %s bytes available: %d", argv[i+1], num_bytes);
+			log_message(logmessage);
 #endif
 			
-			// Read bytes from the serial port
-			long n = read(entFileHandle, &buf[buf_pos], sizeof(buf[0]) * 128);
-		
-			// Check for an error
-			if(n != 128){
-				sprintf(logmessage, "<ERROR> Error reading from tty device. Num bytes: %ld. Error %d: %s", n, errno, strerror(errno));
+			if (num_bytes >= 128) {
+				
+#ifdef debug
+				sprintf(logmessage, "<DEBUG> Reading data from %s.", argv[i+1]);
 				log_message(logmessage);
-				exit_cleanup(-9);
-			}
-			
-			// Increment our position
-			buf_pos += 128;
-			
-			// Wait till the buffer is full
-			if (buf_pos >= 512) {
-
+#endif
+				
+				// Read bytes from the serial port
+				long n = read(entFileHandles[i], &buf[buf_pos], sizeof(buf[0]) * 128);
+				if (n != 128) {
+					sprintf(logmessage, "<ERROR> Error reading from device: %s. Recieved bytes: %ld. Error %d: %s", argv[i+1], n, errno, strerror(errno));
+					log_message(logmessage);
+					exit_cleanup(-9);
+				}
+				
 #ifdef debug
 				log_message("<DEBUG> Converting ASCII '1'/'0' to ints.");
 #endif
 				
-				// Convert ASCII bits into int 0 and 1 values, and sanity check the data
-				for (int i = 0; i < (sizeof(buf) / sizeof(buf[0])); i++) {
-					if (buf[i] != '0' && buf[i] != '1') {
-						sprintf(logmessage, "<ERROR> Invalid input data. Expect '0' and '1' only. Recieved: %d", buf[i]);
+				// Count up our per device bit stats, check for errors, and convert from ASCII to ints
+				for (int j = 0; j < 128; j++) {
+					if (buf[buf_pos+j] != '0' && buf[buf_pos+j] != '1') {
+						sprintf(logmessage, "<ERROR> Invalid input data from %s. Expect '0' and '1' only. Recieved: %d", argv[i+1], buf[buf_pos+j]);
 						log_message(logmessage);
 						exit_cleanup(-11);
 					}
 					
-					buf[i] = buf[i] - '0';
-					
-					if (buf[i] == 0) {
-						biased_num_zeros++;
+					if (buf[buf_pos+j] == '0') {
+						deviceCounters[i][0]++;
+						buf[buf_pos+j] = 0;
 					} else {
-						biased_num_ones++;
+						deviceCounters[i][1]++;
+						buf[buf_pos+j] = 1;
 					}
 				}
+				
+				// Increment our buffer position
+				buf_pos += 128;
+				
+				// If the buffer is full, do some processing
+				if (buf_pos >= 512) {
 
 #ifdef debug
-				log_message("<DEBUG> AMLS processing.");
+					log_message("<DEBUG> AMLS processing.");
 #endif
-				
-				// AMLS process the buf
-				char *amls_result = amls(buf, (sizeof(buf) / sizeof(buf[0])));
-
+					
+					// AMLS process the buf
+					char *amls_result = amls(buf, (sizeof(buf) / sizeof(buf[0])));
+					
 #ifdef debug
-				log_message("<DEBUG> Collecting bits into bytes, mixing data, and writing out.");
+					log_message("<DEBUG> Collecting bits into bytes, mixing data, and writing out.");
 #endif
-				
-				// Convert bits from AMLS into bytes
-				for (int i = 0; i < (sizeof(buf) / (sizeof(buf[0]))); i++) {
-					if (amls_result[i] != 0 && amls_result[i] != 1) break;
 					
-					// Update our bit counts
-					if (amls_result[i] == 0) { num_zeros++; } else { num_ones++; }
-					
-					buf_whitened[buf_whitened_pos] |= (amls_result[i] << buf_whitened_bit);
-					buf_whitened_bit++;
-					if (buf_whitened_bit > 7) {
-						buf_whitened_bit = 0;
-						buf_whitened_pos++;
-					}
-					if (buf_whitened_pos >= (sizeof(buf_whitened) / sizeof(buf_whitened[0]))) {
-						for (int i = 0; i < ((sizeof(buf_whitened) / sizeof(buf_whitened[0])) / 2); i++) {
-							// XOR mix the debiased data
-							char value = buf_whitened[i] ^ buf_whitened[i+((sizeof(buf_whitened) / sizeof(buf_whitened[0])) / 2)];
-							
-							// Update the counter
-							ent_count++;
-
-							// Output the data
+					// Convert bits from AMLS into bytes
+					for (int k = 0; k < (sizeof(buf) / (sizeof(buf[0]))); k++) {
+						if (amls_result[k] != 0 && amls_result[k] != 1) break;
+						
+						// Update our bit counts
+						if (amls_result[k] == 0) { num_zeros++; } else { num_ones++; }
+						
+						buf_whitened[buf_whitened_pos] |= (amls_result[k] << buf_whitened_bit);
+						buf_whitened_bit++;
+						if (buf_whitened_bit > 7) {
+							buf_whitened_bit = 0;
+							buf_whitened_pos++;
+						}
+						if (buf_whitened_pos >= (sizeof(buf_whitened) / sizeof(buf_whitened[0]))) {
+							for (int l = 0; l < ((sizeof(buf_whitened) / sizeof(buf_whitened[0])) / 2); l++) {
+								// XOR mix the debiased data
+								char value = buf_whitened[l] ^ buf_whitened[l+((sizeof(buf_whitened) / sizeof(buf_whitened[0])) / 2)];
+								
+								// Update the counter
+								ent_count++;
+								
+								// Output the data
 #ifdef file_output
-							long m = write(outFileHandle, &value, sizeof(value));
-							if (m < 0) {
-								sprintf(logmessage, "<ERROR> Error writing to output file. Error %d: %s", errno, strerror(errno));
-								log_message(logmessage);
-								exit_cleanup(-15);
-							}
+								long m = write(outFileHandle, &value, sizeof(value));
+								if (m < 0) {
+									sprintf(logmessage, "<ERROR> Error writing to output file. Error %d: %s", errno, strerror(errno));
+									log_message(logmessage);
+									exit_cleanup(-15);
+								}
 #else
 #ifdef __APPLE__
-							long m = write(rndFileHandle, &value, sizeof(value));
-							if(m < 0){
-								sprintf(logmessage, "Error writing to %s device. Error %d: %s", rndfile, errno, strerror(errno));
-								log_message(logmessage);
-								exit_cleanup(-21);
-							}
+								long m = write(rndFileHandle, &value, sizeof(value));
+								if(m < 0){
+									sprintf(logmessage, "Error writing to %s device. Error %d: %s", rndfile, errno, strerror(errno));
+									log_message(logmessage);
+									exit_cleanup(-21);
+								}
 #elif __linux
-							struct {
-								int ent_count;
-								int size;
-								unsigned char data[1024];
-							} entropy;
-							
-							entropy.data[0] = value;
-							entropy.size = 1;
-							entropy.ent_count = 8;
-							
-							if( ioctl(rndFileHandle, RNDADDENTROPY, &entropy) < 0){
-								sprintf(logmessage, "<ERROR> Could not add entropy to the pool. Error %d: %s", errno, strerror(errno));
-								log_message(logmessage);
-								exit_cleanup(-19);
+								struct {
+									int ent_count;
+									int size;
+									unsigned char data[1024];
+								} entropy;
+								
+								entropy.data[0] = value;
+								entropy.size = 1;
+								entropy.ent_count = 8;
+								
+								if( ioctl(rndFileHandle, RNDADDENTROPY, &entropy) < 0){
+									sprintf(logmessage, "<ERROR> Could not add entropy to the pool. Error %d: %s", errno, strerror(errno));
+									log_message(logmessage);
+									exit_cleanup(-19);
+								}
+#endif
+#endif
 							}
-#endif
-#endif
+							
+							// Reset some variables
+							buf_whitened_pos = 0;
+							memset(buf_whitened, 0, (sizeof(buf_whitened) / sizeof(buf_whitened[0])));
 						}
-						
-						// Reset some variables
-						buf_whitened_pos = 0;
-						memset(buf_whitened, 0, (sizeof(buf_whitened) / sizeof(buf_whitened[0])));
 					}
+					
+					// Free the memory AMLS used for this block of data
+					free(amls_result);
+					
+					buf_pos = 0;
 				}
-				
-				// Free the memory AMLS used for this block of data
-				free(amls_result);
-				
-				buf_pos = 0;
 			}
-		}else{
-			// Sleep for 250ms (non-blocking wait, lowers CPU time dramatically)
-			usleep(250*1000);
 		}
+		
+		usleep(SLEEP_TIME);
     }
 }
